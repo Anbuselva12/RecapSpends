@@ -1,0 +1,6 @@
+{
+  "name": "RecapSpends",
+  "description": "Track Expense Smartly — India-first personal finance, vehicle maintenance tracker, project budgets, bills, and AI bill scanner",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

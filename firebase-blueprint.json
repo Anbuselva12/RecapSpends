@@ -1,0 +1,149 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User preferences, budget settings, and sample-data seed status.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Authenticated Firebase UID" },
+        "monthlyBudget": { "type": "number", "description": "Monthly spending budget in INR" },
+        "language": { "type": "string", "enum": ["en", "ta"], "description": "UI language code" },
+        "seeded": { "type": "boolean", "description": "Whether initial sample data has been seeded" },
+        "displayName": { "type": "string", "description": "Optional display name" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update" }
+      },
+      "required": ["userId", "monthlyBudget", "language", "seeded", "createdAt", "updatedAt"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Customizable expense category with icon, color token index, and subcategories.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "iconKey": { "type": "string" },
+        "colorIndex": { "type": "integer" },
+        "subcategories": { "type": "array" },
+        "sortOrder": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name", "iconKey", "colorIndex", "subcategories", "sortOrder", "createdAt", "updatedAt"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "Individual expense entry with optional GST invoice metadata and item-level breakdown.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "amount": { "type": "number" },
+        "dateEpochMs": { "type": "integer" },
+        "categoryId": { "type": "string" },
+        "subcategory": { "type": "string" },
+        "paymentMode": { "type": "string", "enum": ["UPI", "Cash", "Card", "Bank"] },
+        "projectId": { "type": "string" },
+        "vehicleId": { "type": "string" },
+        "gstin": { "type": "string" },
+        "billNumber": { "type": "string" },
+        "taxableValue": { "type": "number" },
+        "cgst": { "type": "number" },
+        "sgst": { "type": "number" },
+        "igst": { "type": "number" },
+        "roundOff": { "type": "number" },
+        "items": { "type": "array" },
+        "attachmentNotes": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "amount", "dateEpochMs", "categoryId", "subcategory", "paymentMode", "createdAt", "updatedAt"]
+    },
+    "Vehicle": {
+      "title": "Vehicle",
+      "description": "Tracked vehicle with odometer, mileage, service checklist items, and visit history.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "shortName": { "type": "string" },
+        "type": { "type": "string", "enum": ["bike", "car"] },
+        "plate": { "type": "string" },
+        "odometer": { "type": "integer" },
+        "avgMileage": { "type": "number" },
+        "items": { "type": "array" },
+        "history": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name", "shortName", "type", "plate", "odometer", "avgMileage", "items", "history", "createdAt", "updatedAt"]
+    },
+    "Bill": {
+      "title": "Bill",
+      "description": "Recurring or one-off bill reminder with due date, repeat schedule, and paid status.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "amount": { "type": "number" },
+        "dueEpochMs": { "type": "integer" },
+        "repeat": { "type": "string", "enum": ["Once", "Monthly", "Bi-monthly", "Half-yearly", "Yearly"] },
+        "reminder": { "type": "string", "enum": ["On the day", "3 days before", "7 days before"] },
+        "categoryId": { "type": "string" },
+        "subcategory": { "type": "string" },
+        "iconKey": { "type": "string" },
+        "autopay": { "type": "boolean" },
+        "paid": { "type": "boolean" },
+        "paidOnEpochMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name", "amount", "dueEpochMs", "repeat", "reminder", "categoryId", "subcategory", "iconKey", "autopay", "paid", "createdAt", "updatedAt"]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "Long-running project (house build, business setup, renovation) with phase budgets and vendors.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "iconKey": { "type": "string" },
+        "colorIndex": { "type": "integer" },
+        "budget": { "type": "number" },
+        "phases": { "type": "array" },
+        "vendors": { "type": "array" },
+        "payments": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name", "subtitle", "iconKey", "colorIndex", "budget", "phases", "vendors", "payments", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile and settings document"
+    },
+    "/users/{userId}/categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/Category" },
+      "description": "User expense categories"
+    },
+    "/users/{userId}/expenses/{expenseId}": {
+      "schema": { "$ref": "#/entities/Expense" },
+      "description": "User expenses and scanned GST bills"
+    },
+    "/users/{userId}/vehicles/{vehicleId}": {
+      "schema": { "$ref": "#/entities/Vehicle" },
+      "description": "User vehicles and maintenance checklists"
+    },
+    "/users/{userId}/bills/{billId}": {
+      "schema": { "$ref": "#/entities/Bill" },
+      "description": "User recurring and one-off bills"
+    },
+    "/users/{userId}/projects/{projectId}": {
+      "schema": { "$ref": "#/entities/Project" },
+      "description": "User projects, phases, vendors, and payments"
+    }
+  }
+}

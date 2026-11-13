@@ -1,0 +1,219 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.monthlyBudget is number && data.monthlyBudget > 0 && data.monthlyBudget <= 100000000 &&
+             data.language is string && data.language in ['en', 'ta'] &&
+             data.seeded is bool &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 80));
+    }
+
+    function isValidCategory(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 60 &&
+             data.iconKey is string && data.iconKey.size() >= 1 && data.iconKey.size() <= 30 &&
+             data.colorIndex is int && data.colorIndex >= 1 && data.colorIndex <= 9 &&
+             data.subcategories is list && data.subcategories.size() <= 25 &&
+             (data.subcategories.size() == 0 || data.subcategories[0] is string) &&
+             data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 500;
+    }
+
+    function isValidExpense(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+             data.amount is number && data.amount >= 0 && data.amount <= 1000000000 &&
+             data.dateEpochMs is int && data.dateEpochMs > 0 &&
+             data.categoryId is string && data.categoryId.size() >= 1 && data.categoryId.size() <= 128 &&
+             data.subcategory is string && data.subcategory.size() <= 80 &&
+             data.paymentMode is string && data.paymentMode in ['UPI', 'Cash', 'Card', 'Bank'] &&
+             (!('projectId' in data) || (data.projectId is string && data.projectId.size() <= 128)) &&
+             (!('vehicleId' in data) || (data.vehicleId is string && data.vehicleId.size() <= 128)) &&
+             (!('gstin' in data) || (data.gstin is string && data.gstin.size() <= 32)) &&
+             (!('billNumber' in data) || (data.billNumber is string && data.billNumber.size() <= 64)) &&
+             (!('taxableValue' in data) || (data.taxableValue is number && data.taxableValue >= 0)) &&
+             (!('cgst' in data) || (data.cgst is number && data.cgst >= 0)) &&
+             (!('sgst' in data) || (data.sgst is number && data.sgst >= 0)) &&
+             (!('igst' in data) || (data.igst is number && data.igst >= 0)) &&
+             (!('roundOff' in data) || (data.roundOff is number)) &&
+             (!('items' in data) || (data.items is list && data.items.size() <= 50 && (data.items.size() == 0 || data.items[0] is map))) &&
+             (!('attachmentNotes' in data) || (data.attachmentNotes is list && data.attachmentNotes.size() <= 10 && (data.attachmentNotes.size() == 0 || data.attachmentNotes[0] is string)));
+    }
+
+    function isValidVehicle(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.shortName is string && data.shortName.size() >= 1 && data.shortName.size() <= 40 &&
+             data.type is string && data.type in ['bike', 'car'] &&
+             data.plate is string && data.plate.size() >= 1 && data.plate.size() <= 30 &&
+             data.odometer is int && data.odometer >= 0 && data.odometer <= 2000000 &&
+             data.avgMileage is number && data.avgMileage >= 0 && data.avgMileage <= 200 &&
+             data.items is list && data.items.size() <= 40 && (data.items.size() == 0 || data.items[0] is map) &&
+             data.history is list && data.history.size() <= 100 && (data.history.size() == 0 || data.history[0] is map);
+    }
+
+    function isValidBill(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+             data.amount is number && data.amount > 0 && data.amount <= 1000000000 &&
+             data.dueEpochMs is int && data.dueEpochMs > 0 &&
+             data.repeat is string && data.repeat in ['Once', 'Monthly', 'Bi-monthly', 'Half-yearly', 'Yearly'] &&
+             data.reminder is string && data.reminder in ['On the day', '3 days before', '7 days before'] &&
+             data.categoryId is string && data.categoryId.size() >= 1 && data.categoryId.size() <= 128 &&
+             data.subcategory is string && data.subcategory.size() <= 80 &&
+             data.iconKey is string && data.iconKey.size() >= 1 && data.iconKey.size() <= 30 &&
+             data.autopay is bool &&
+             data.paid is bool &&
+             (!('paidOnEpochMs' in data) || (data.paidOnEpochMs is int && data.paidOnEpochMs > 0));
+    }
+
+    function isValidProject(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+             data.subtitle is string && data.subtitle.size() <= 140 &&
+             data.iconKey is string && data.iconKey.size() >= 1 && data.iconKey.size() <= 30 &&
+             data.colorIndex is int && data.colorIndex >= 1 && data.colorIndex <= 9 &&
+             data.budget is number && data.budget > 0 && data.budget <= 1000000000 &&
+             data.phases is list && data.phases.size() <= 25 && (data.phases.size() == 0 || data.phases[0] is map) &&
+             data.vendors is list && data.vendors.size() <= 50 && (data.vendors.size() == 0 || data.vendors[0] is map) &&
+             data.payments is list && data.payments.size() <= 200 && (data.payments.size() == 0 || data.payments[0] is map);
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+      allow create: if isValidId(userId) && isOwner(userId) &&
+                       incoming().keys().hasAll(['userId', 'monthlyBudget', 'language', 'seeded', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'monthlyBudget', 'language', 'seeded', 'displayName', 'createdAt', 'updatedAt']) &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidUserProfile(incoming(), userId);
+      allow update: if isValidId(userId) && isOwner(userId) &&
+                       isValidUserProfile(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['monthlyBudget', 'language', 'seeded', 'displayName', 'updatedAt']);
+      allow delete: if isValidId(userId) && isOwner(userId);
+
+      match /categories/{categoryId} {
+        allow get: if isValidId(userId) && isValidId(categoryId) && isOwner(userId);
+        allow list: if isOwner(userId);
+        allow create: if isValidId(userId) && isValidId(categoryId) && isOwner(userId) &&
+                         incoming().keys().hasAll(['userId', 'name', 'iconKey', 'colorIndex', 'subcategories', 'sortOrder', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'name', 'iconKey', 'colorIndex', 'subcategories', 'sortOrder', 'createdAt', 'updatedAt']) &&
+                         isValidTimestamp(incoming().createdAt) &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         isValidCategory(incoming(), userId);
+        allow update: if isValidId(userId) && isValidId(categoryId) && isOwner(userId) &&
+                         isValidCategory(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'iconKey', 'colorIndex', 'subcategories', 'sortOrder', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(categoryId) && isOwner(userId);
+      }
+
+      match /expenses/{expenseId} {
+        allow get: if isValidId(userId) && isValidId(expenseId) && isOwner(userId);
+        allow list: if isOwner(userId);
+        allow create: if isValidId(userId) && isValidId(expenseId) && isOwner(userId) &&
+                         incoming().keys().hasAll(['userId', 'title', 'amount', 'dateEpochMs', 'categoryId', 'subcategory', 'paymentMode', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'title', 'amount', 'dateEpochMs', 'categoryId', 'subcategory', 'paymentMode', 'projectId', 'vehicleId', 'gstin', 'billNumber', 'taxableValue', 'cgst', 'sgst', 'igst', 'roundOff', 'items', 'attachmentNotes', 'createdAt', 'updatedAt']) &&
+                         isValidTimestamp(incoming().createdAt) &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         isValidExpense(incoming(), userId);
+        allow update: if isValidId(userId) && isValidId(expenseId) && isOwner(userId) &&
+                         isValidExpense(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['title', 'amount', 'dateEpochMs', 'categoryId', 'subcategory', 'paymentMode', 'projectId', 'vehicleId', 'gstin', 'billNumber', 'taxableValue', 'cgst', 'sgst', 'igst', 'roundOff', 'items', 'attachmentNotes', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(expenseId) && isOwner(userId);
+      }
+
+      match /vehicles/{vehicleId} {
+        allow get: if isValidId(userId) && isValidId(vehicleId) && isOwner(userId);
+        allow list: if isOwner(userId);
+        allow create: if isValidId(userId) && isValidId(vehicleId) && isOwner(userId) &&
+                         incoming().keys().hasAll(['userId', 'name', 'shortName', 'type', 'plate', 'odometer', 'avgMileage', 'items', 'history', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'name', 'shortName', 'type', 'plate', 'odometer', 'avgMileage', 'items', 'history', 'createdAt', 'updatedAt']) &&
+                         isValidTimestamp(incoming().createdAt) &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         isValidVehicle(incoming(), userId);
+        allow update: if isValidId(userId) && isValidId(vehicleId) && isOwner(userId) &&
+                         isValidVehicle(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'shortName', 'type', 'plate', 'odometer', 'avgMileage', 'items', 'history', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(vehicleId) && isOwner(userId);
+      }
+
+      match /bills/{billId} {
+        allow get: if isValidId(userId) && isValidId(billId) && isOwner(userId);
+        allow list: if isOwner(userId);
+        allow create: if isValidId(userId) && isValidId(billId) && isOwner(userId) &&
+                         incoming().keys().hasAll(['userId', 'name', 'amount', 'dueEpochMs', 'repeat', 'reminder', 'categoryId', 'subcategory', 'iconKey', 'autopay', 'paid', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'name', 'amount', 'dueEpochMs', 'repeat', 'reminder', 'categoryId', 'subcategory', 'iconKey', 'autopay', 'paid', 'paidOnEpochMs', 'createdAt', 'updatedAt']) &&
+                         isValidTimestamp(incoming().createdAt) &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         isValidBill(incoming(), userId);
+        allow update: if isValidId(userId) && isValidId(billId) && isOwner(userId) &&
+                         isValidBill(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'amount', 'dueEpochMs', 'repeat', 'reminder', 'categoryId', 'subcategory', 'iconKey', 'autopay', 'paid', 'paidOnEpochMs', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(billId) && isOwner(userId);
+      }
+
+      match /projects/{projectId} {
+        allow get: if isValidId(userId) && isValidId(projectId) && isOwner(userId);
+        allow list: if isOwner(userId);
+        allow create: if isValidId(userId) && isValidId(projectId) && isOwner(userId) &&
+                         incoming().keys().hasAll(['userId', 'name', 'subtitle', 'iconKey', 'colorIndex', 'budget', 'phases', 'vendors', 'payments', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'name', 'subtitle', 'iconKey', 'colorIndex', 'budget', 'phases', 'vendors', 'payments', 'createdAt', 'updatedAt']) &&
+                         isValidTimestamp(incoming().createdAt) &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         isValidProject(incoming(), userId);
+        allow update: if isValidId(userId) && isValidId(projectId) && isOwner(userId) &&
+                         isValidProject(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'subtitle', 'iconKey', 'colorIndex', 'budget', 'phases', 'vendors', 'payments', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(projectId) && isOwner(userId);
+      }
+    }
+  }
+}
