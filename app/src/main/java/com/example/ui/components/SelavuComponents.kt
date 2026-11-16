@@ -1,7 +1,13 @@
 package com.example.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -9,6 +15,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -19,24 +26,28 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apartment
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CurrencyRupee
 import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.HomeWork
 import androidx.compose.material.icons.filled.Link
@@ -48,7 +59,7 @@ import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.ShoppingBag
-import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.Wifi
@@ -56,13 +67,21 @@ import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.PieChart
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextFieldColors
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -77,15 +96,23 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.res.ResourcesCompat
+import coil.compose.AsyncImage
+import com.example.R
 import com.example.data.model.ServiceStatus
+import com.example.data.update.InAppUpdateUiState
 import com.example.ui.theme.SelavuTheme
 import com.example.util.IndianFormatters
 import com.example.util.selavuStrings
@@ -116,19 +143,430 @@ fun iconForKey(key: String): ImageVector = when (key) {
 }
 
 @Composable
+fun selavuTextFieldColors(
+    containerColor: Color = MaterialTheme.colorScheme.background
+): TextFieldColors {
+    val colorScheme = MaterialTheme.colorScheme
+    return OutlinedTextFieldDefaults.colors(
+        focusedContainerColor = containerColor,
+        unfocusedContainerColor = containerColor,
+        disabledContainerColor = colorScheme.surfaceVariant,
+        focusedBorderColor = colorScheme.primary,
+        unfocusedBorderColor = colorScheme.outlineVariant,
+        focusedLabelColor = colorScheme.onPrimaryContainer,
+        unfocusedLabelColor = colorScheme.onSurfaceVariant,
+        focusedTextColor = colorScheme.onSurface,
+        unfocusedTextColor = colorScheme.onSurface,
+        focusedPlaceholderColor = colorScheme.outline,
+        unfocusedPlaceholderColor = colorScheme.outline,
+        cursorColor = colorScheme.primary
+    )
+}
+
+@Composable
+fun SelavuTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    label: String? = null,
+    placeholder: String? = null,
+    leadingIcon: @Composable (() -> Unit)? = null,
+    trailingIcon: @Composable (() -> Unit)? = null,
+    singleLine: Boolean = true,
+    enabled: Boolean = true,
+    containerColor: Color = MaterialTheme.colorScheme.background,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = label?.let { { Text(it, style = MaterialTheme.typography.bodyMedium) } },
+        placeholder = placeholder?.let { { Text(it, style = MaterialTheme.typography.bodyMedium) } },
+        leadingIcon = leadingIcon,
+        trailingIcon = trailingIcon,
+        singleLine = singleLine,
+        enabled = enabled,
+        textStyle = MaterialTheme.typography.bodyLarge,
+        visualTransformation = visualTransformation,
+        keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
+        shape = MaterialTheme.shapes.medium,
+        colors = selavuTextFieldColors(containerColor),
+        modifier = modifier
+    )
+}
+
+@Composable
+fun SelavuMainHeader(
+    title: String,
+    subtitle: String? = null,
+    userDisplayName: String? = null,
+    userPhotoUrl: String? = null,
+    onOpenProfile: () -> Unit,
+    profileTestTag: String,
+    trailingContent: @Composable (() -> Unit)? = null
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            if (!subtitle.isNullOrBlank()) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colorScheme.outline,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.headlineLarge,
+                color = colorScheme.onBackground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (trailingContent != null) {
+                trailingContent()
+            }
+            Box(
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .size(44.dp)
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(colorScheme.surface)
+                    .border(1.dp, colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+                    .clickable(onClick = onOpenProfile)
+                    .testTag(profileTestTag),
+                contentAlignment = Alignment.Center
+            ) {
+                val initial = userDisplayName?.trim()?.firstOrNull()?.uppercaseChar()?.toString()
+                when {
+                    !userPhotoUrl.isNullOrBlank() -> {
+                        AsyncImage(
+                            model = userPhotoUrl,
+                            contentDescription = "Profile and settings",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clip(CircleShape)
+                        )
+                    }
+
+                    initial != null -> {
+                        Box(
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clip(CircleShape)
+                                .background(colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = initial,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+
+                    else -> {
+                        Icon(
+                            imageVector = Icons.Filled.AccountCircle,
+                            contentDescription = "Profile and settings",
+                            tint = colorScheme.onSurface,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SelavuEmptyState(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    SelavuCard(modifier = modifier) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 10.dp, horizontal = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = colorScheme.onSurface,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+            if (actionLabel != null && onAction != null) {
+                Spacer(modifier = Modifier.height(2.dp))
+                OutlinedButton(
+                    onClick = onAction,
+                    shape = MaterialTheme.shapes.small,
+                    border = BorderStroke(1.dp, colorScheme.primary),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.onPrimaryContainer),
+                    modifier = Modifier.height(42.dp)
+                ) {
+                    Text(actionLabel, style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun InAppUpdateBanner(
+    state: InAppUpdateUiState,
+    onStartUpdate: () -> Unit,
+    onCompleteUpdate: () -> Unit,
+    onIgnoreUpdate: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val extendedColors = SelavuTheme.extendedColors
+    AnimatedVisibility(
+        visible = state !is InAppUpdateUiState.Hidden,
+        enter = expandVertically(tween(240)) + fadeIn(tween(240)),
+        exit = shrinkVertically(tween(200)) + fadeOut(tween(200)),
+        modifier = modifier
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 600.dp)
+                    .clip(MaterialTheme.shapes.large)
+                    .background(colorScheme.surface)
+                    .border(1.2.dp, colorScheme.primary.copy(alpha = 0.45f), MaterialTheme.shapes.large)
+                    .padding(14.dp)
+                    .testTag("in_app_update_banner"),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                when (state) {
+                    is InAppUpdateUiState.Available -> {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(MaterialTheme.shapes.small)
+                                    .background(colorScheme.primaryContainer),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.SystemUpdate,
+                                    contentDescription = "Update available",
+                                    tint = colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = "Update available",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "A newer build (v${state.availableVersionCode}) is ready to download while you use RecapSpends.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(
+                                onClick = { onIgnoreUpdate(state.availableVersionCode) },
+                                modifier = Modifier
+                                    .height(40.dp)
+                                    .testTag("in_app_update_ignore_button")
+                            ) {
+                                Text(
+                                    text = "Ignore",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Button(
+                                onClick = onStartUpdate,
+                                shape = MaterialTheme.shapes.small,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = colorScheme.primary,
+                                    contentColor = colorScheme.onPrimary
+                                ),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                                modifier = Modifier
+                                    .height(40.dp)
+                                    .testTag("in_app_update_button")
+                            ) {
+                                Text("Update", style = MaterialTheme.typography.labelLarge)
+                            }
+                        }
+                    }
+
+                    is InAppUpdateUiState.Downloading -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Downloading update…",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = colorScheme.onSurface
+                            )
+                            Text(
+                                text = "${(state.progress * 100).toInt()}%",
+                                style = SelavuTheme.textStyles.numericCaption,
+                                color = colorScheme.onPrimaryContainer
+                            )
+                        }
+                        SelavuProgressBar(progress = state.progress, color = colorScheme.primary, height = 6.dp)
+                    }
+
+                    is InAppUpdateUiState.Downloaded -> {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(MaterialTheme.shapes.small)
+                                    .background(extendedColors.okSoft),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.CheckCircle,
+                                    contentDescription = "Update ready",
+                                    tint = extendedColors.ok,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = "Update ready to install",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Restart RecapSpends to finish applying the update.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(
+                                onClick = { onIgnoreUpdate(state.availableVersionCode) },
+                                modifier = Modifier
+                                    .height(40.dp)
+                                    .testTag("in_app_update_ignore_button")
+                            ) {
+                                Text(
+                                    text = "Later",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Button(
+                                onClick = onCompleteUpdate,
+                                shape = MaterialTheme.shapes.small,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = extendedColors.ok,
+                                    contentColor = colorScheme.onPrimary
+                                ),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                                modifier = Modifier
+                                    .height(40.dp)
+                                    .testTag("in_app_update_restart_button")
+                            ) {
+                                Text("Restart", style = MaterialTheme.typography.labelLarge)
+                            }
+                        }
+                    }
+
+                    InAppUpdateUiState.Hidden -> Unit
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun CategoryTile(
     iconKey: String,
     colorIndex: Int,
     size: Dp = 40.dp,
     iconSize: Dp = 20.dp
 ) {
-    val colors = SelavuTheme.colors
-    val tint = colors.categoryColor(colorIndex)
-    val bg = tint.copy(alpha = if (colors.isDark) 0.22f else 0.14f)
+    val extendedColors = SelavuTheme.extendedColors
+    val tint = extendedColors.categoryColor(colorIndex)
+    val bg = tint.copy(alpha = if (extendedColors.isDark) 0.22f else 0.14f)
     Box(
         modifier = Modifier
             .size(size)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(MaterialTheme.shapes.small)
             .background(bg),
         contentAlignment = Alignment.Center
     ) {
@@ -147,13 +585,14 @@ fun StatusPill(
     status: ServiceStatus? = null,
     isAccent: Boolean = false
 ) {
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
+    val extendedColors = SelavuTheme.extendedColors
     val (bg, fg) = when {
-        status == ServiceStatus.OVERDUE -> colors.badSoft to colors.bad
-        status == ServiceStatus.DUE_SOON -> colors.warnSoft to colors.warn
-        status == ServiceStatus.OK -> colors.okSoft to colors.ok
-        isAccent -> colors.accentSoft to colors.accentInk
-        else -> colors.sunk to colors.ink2
+        status == ServiceStatus.OVERDUE -> colorScheme.errorContainer to colorScheme.error
+        status == ServiceStatus.DUE_SOON -> extendedColors.warnSoft to extendedColors.warn
+        status == ServiceStatus.OK -> extendedColors.okSoft to extendedColors.ok
+        isAccent -> colorScheme.primaryContainer to colorScheme.onPrimaryContainer
+        else -> colorScheme.surfaceVariant to colorScheme.onSurfaceVariant
     }
     Box(
         modifier = Modifier
@@ -175,7 +614,7 @@ fun StatusPill(
 fun SelavuProgressBar(
     progress: Float,
     color: Color,
-    trackColor: Color = SelavuTheme.colors.sunk,
+    trackColor: Color = MaterialTheme.colorScheme.surfaceVariant,
     height: Dp = 7.dp,
     modifier: Modifier = Modifier
 ) {
@@ -207,14 +646,14 @@ fun SelavuCard(
     onClick: (() -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
     val base = modifier
         .fillMaxWidth()
-        .clip(RoundedCornerShape(18.dp))
-        .background(colors.surface)
-        .border(1.dp, colors.line, RoundedCornerShape(18.dp))
+        .clip(MaterialTheme.shapes.large)
+        .background(colorScheme.surface)
+        .border(1.dp, colorScheme.outlineVariant, MaterialTheme.shapes.large)
         .let { if (onClick != null) it.clickable(onClick = onClick) else it }
-        .padding(14.dp)
+        .padding(16.dp)
     Box(modifier = base) {
         content()
     }
@@ -225,13 +664,13 @@ fun SelavuListContainer(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit
 ) {
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(colors.surface)
-            .border(1.dp, colors.line, RoundedCornerShape(18.dp))
+            .clip(MaterialTheme.shapes.large)
+            .background(colorScheme.surface)
+            .border(1.dp, colorScheme.outlineVariant, MaterialTheme.shapes.large)
     ) {
         content()
     }
@@ -243,7 +682,7 @@ fun SelavuDivider() {
         modifier = Modifier
             .fillMaxWidth()
             .height(1.dp)
-            .background(SelavuTheme.colors.line)
+            .background(MaterialTheme.colorScheme.outlineVariant)
     )
 }
 
@@ -253,26 +692,26 @@ fun SectionHeader(
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null
 ) {
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 22.dp, bottom = 10.dp),
+            .padding(top = 18.dp, bottom = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             text = title,
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
-            color = colors.ink
+            style = SelavuTheme.textStyles.sectionTitle,
+            color = colorScheme.onBackground
         )
         if (actionLabel != null && onAction != null) {
             Text(
                 text = actionLabel,
                 style = MaterialTheme.typography.labelLarge,
-                color = colors.accentInk,
+                color = colorScheme.onPrimaryContainer,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(MaterialTheme.shapes.extraSmall)
                     .clickable(onClick = onAction)
                     .padding(horizontal = 6.dp, vertical = 4.dp)
             )
@@ -286,7 +725,7 @@ fun SelavuTopNavBar(
     onBack: () -> Unit,
     trailing: @Composable (() -> Unit)? = null
 ) {
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -297,10 +736,10 @@ fun SelavuTopNavBar(
         Box(
             modifier = Modifier
                 .minimumInteractiveComponentSize()
-                .size(42.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(colors.surface)
-                .border(1.dp, colors.line, RoundedCornerShape(14.dp))
+                .size(44.dp)
+                .clip(MaterialTheme.shapes.medium)
+                .background(colorScheme.surface)
+                .border(1.dp, colorScheme.outlineVariant, MaterialTheme.shapes.medium)
                 .clickable(onClick = onBack)
                 .testTag("nav_back_button"),
             contentAlignment = Alignment.Center
@@ -308,14 +747,14 @@ fun SelavuTopNavBar(
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                 contentDescription = "Back",
-                tint = colors.ink,
+                tint = colorScheme.onSurface,
                 modifier = Modifier.size(20.dp)
             )
         }
         Text(
             text = title,
             style = MaterialTheme.typography.titleLarge,
-            color = colors.ink,
+            color = colorScheme.onBackground,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
@@ -333,12 +772,12 @@ fun SelavuSegmentedControl(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(13.dp))
-            .background(colors.sunk)
+            .clip(MaterialTheme.shapes.medium)
+            .background(colorScheme.surfaceVariant)
             .padding(3.dp),
         horizontalArrangement = Arrangement.spacedBy(2.dp)
     ) {
@@ -347,22 +786,22 @@ fun SelavuSegmentedControl(
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(MaterialTheme.shapes.small)
                     .then(
                         if (selected) {
                             Modifier
-                                .shadow(1.dp, RoundedCornerShape(10.dp))
-                                .background(colors.surface)
+                                .shadow(1.dp, MaterialTheme.shapes.small)
+                                .background(colorScheme.surface)
                         } else Modifier
                     )
                     .clickable { onSelect(key) }
-                    .padding(vertical = 9.dp, horizontal = 8.dp),
+                    .padding(vertical = 10.dp, horizontal = 8.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = label,
-                    style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp),
-                    color = if (selected) colors.ink else colors.ink2,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (selected) colorScheme.onSurface else colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -379,10 +818,10 @@ fun SelavuFilterChip(
     icon: ImageVector? = null,
     modifier: Modifier = Modifier
 ) {
-    val colors = SelavuTheme.colors
-    val bg = if (selected) colors.accentSoft else colors.surface
-    val border = if (selected) colors.accent else colors.line
-    val fg = if (selected) colors.accentInk else colors.ink
+    val colorScheme = MaterialTheme.colorScheme
+    val bg = if (selected) colorScheme.primaryContainer else colorScheme.surface
+    val border = if (selected) colorScheme.primary else colorScheme.outlineVariant
+    val fg = if (selected) colorScheme.onPrimaryContainer else colorScheme.onSurface
     Row(
         modifier = modifier
             .clip(RoundedCornerShape(99.dp))
@@ -403,7 +842,7 @@ fun SelavuFilterChip(
         }
         Text(
             text = label,
-            style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp),
+            style = MaterialTheme.typography.titleSmall,
             color = fg,
             maxLines = 1
         )
@@ -416,10 +855,10 @@ fun SelavuBottomBar(
     onSelectTab: (String) -> Unit,
     onFabClick: () -> Unit
 ) {
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
     val strings = selavuStrings()
     Surface(
-        color = colors.surface,
+        color = colorScheme.surface,
         tonalElevation = 2.dp
     ) {
         Column {
@@ -442,7 +881,7 @@ fun SelavuBottomBar(
                 BottomTabItem(
                     label = strings.tabTrack,
                     selected = currentTab == "track",
-                    selectedIcon = Icons.Outlined.GridView,
+                    selectedIcon = Icons.Filled.GridView,
                     unselectedIcon = Icons.Outlined.GridView,
                     onClick = { onSelectTab("track") },
                     modifier = Modifier.weight(1f).testTag("tab_track")
@@ -457,8 +896,8 @@ fun SelavuBottomBar(
                             .size(56.dp)
                             .shadow(6.dp, CircleShape)
                             .clip(CircleShape)
-                            .background(colors.accent)
-                            .border(4.dp, colors.surface, CircleShape)
+                            .background(colorScheme.primary)
+                            .border(4.dp, colorScheme.surface, CircleShape)
                             .clickable(onClick = onFabClick)
                             .testTag("fab_add"),
                         contentAlignment = Alignment.Center
@@ -466,7 +905,7 @@ fun SelavuBottomBar(
                         Icon(
                             imageVector = Icons.Filled.Add,
                             contentDescription = "Add",
-                            tint = colors.onAccent,
+                            tint = colorScheme.onPrimary,
                             modifier = Modifier.size(26.dp)
                         )
                     }
@@ -501,26 +940,36 @@ private fun BottomTabItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val colors = SelavuTheme.colors
-    val tint = if (selected) colors.accentInk else colors.ink3
+    val colorScheme = MaterialTheme.colorScheme
+    val tint = if (selected) colorScheme.onPrimaryContainer else colorScheme.outline
     Column(
         modifier = modifier
             .minimumInteractiveComponentSize()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(MaterialTheme.shapes.small)
             .clickable(onClick = onClick)
-            .padding(vertical = 4.dp),
+            .padding(vertical = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
-        Icon(
-            imageVector = if (selected) selectedIcon else unselectedIcon,
-            contentDescription = label,
-            tint = tint,
-            modifier = Modifier.size(22.dp)
-        )
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(99.dp))
+                .background(if (selected) colorScheme.primaryContainer else Color.Transparent)
+                .padding(horizontal = 12.dp, vertical = 3.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = if (selected) selectedIcon else unselectedIcon,
+                contentDescription = label,
+                tint = tint,
+                modifier = Modifier.size(21.dp)
+            )
+        }
         Text(
             text = label,
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+            style = SelavuTheme.textStyles.badgeMicro.copy(
+                fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold
+            ),
             color = tint,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
@@ -538,7 +987,7 @@ data class CategoryShareSlice(
 
 @Composable
 fun CategoryStackedBar(slices: List<CategoryShareSlice>) {
-    val colors = SelavuTheme.colors
+    val extendedColors = SelavuTheme.extendedColors
     val total = slices.sumOf { it.amount }.coerceAtLeast(1.0)
     Row(
         modifier = Modifier
@@ -554,7 +1003,7 @@ fun CategoryStackedBar(slices: List<CategoryShareSlice>) {
                 modifier = Modifier
                     .weight(weight)
                     .height(12.dp)
-                    .background(colors.categoryColor(slice.colorIndex))
+                    .background(extendedColors.categoryColor(slice.colorIndex))
             )
         }
     }
@@ -566,8 +1015,10 @@ fun DonutSpendChart(
     totalAmount: Double,
     modifier: Modifier = Modifier
 ) {
-    val colors = SelavuTheme.colors
-    val sliceColors = slices.map { colors.categoryColor(it.colorIndex) }
+    val colorScheme = MaterialTheme.colorScheme
+    val extendedColors = SelavuTheme.extendedColors
+    val sliceColors = slices.map { extendedColors.categoryColor(it.colorIndex) }
+    val trackColor = colorScheme.surfaceVariant
     val safeTotal = totalAmount.coerceAtLeast(1.0)
     Box(
         modifier = modifier
@@ -579,33 +1030,45 @@ fun DonutSpendChart(
             val strokePx = 24.dp.toPx()
             val arcSize = Size(size.width - strokePx, size.height - strokePx)
             val topLeft = Offset(strokePx / 2f, strokePx / 2f)
-            var startAngle = -90f
-            val gapDeg = if (slices.size > 1) 2.5f else 0f
-            slices.forEachIndexed { idx, slice ->
-                val sweep = ((slice.amount / safeTotal) * 360.0).toFloat()
-                val visSweep = (sweep - gapDeg).coerceAtLeast(1f)
+            if (slices.isEmpty()) {
                 drawArc(
-                    color = sliceColors[idx],
-                    startAngle = startAngle,
-                    sweepAngle = visSweep,
+                    color = trackColor,
+                    startAngle = 0f,
+                    sweepAngle = 360f,
                     useCenter = false,
                     topLeft = topLeft,
                     size = arcSize,
                     style = Stroke(width = strokePx, cap = StrokeCap.Butt)
                 )
-                startAngle += sweep
+            } else {
+                var startAngle = -90f
+                val gapDeg = if (slices.size > 1) 2.5f else 0f
+                slices.forEachIndexed { idx, slice ->
+                    val sweep = ((slice.amount / safeTotal) * 360.0).toFloat()
+                    val visSweep = (sweep - gapDeg).coerceAtLeast(1f)
+                    drawArc(
+                        color = sliceColors[idx],
+                        startAngle = startAngle,
+                        sweepAngle = visSweep,
+                        useCenter = false,
+                        topLeft = topLeft,
+                        size = arcSize,
+                        style = Stroke(width = strokePx, cap = StrokeCap.Butt)
+                    )
+                    startAngle += sweep
+                }
             }
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 text = IndianFormatters.formatLakhCrore(totalAmount),
                 style = MaterialTheme.typography.headlineMedium,
-                color = colors.ink
+                color = colorScheme.onSurface
             )
             Text(
                 text = "total spend",
                 style = MaterialTheme.typography.bodySmall,
-                color = colors.ink2
+                color = colorScheme.onSurfaceVariant
             )
         }
     }
@@ -617,15 +1080,24 @@ fun MonthlyTrendBarChart(
     budget: Double,
     modifier: Modifier = Modifier
 ) {
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
+    val extendedColors = SelavuTheme.extendedColors
+    val context = LocalContext.current
+    val manropeTypeface = remember(context) {
+        try {
+            ResourcesCompat.getFont(context, R.font.manrope)
+        } catch (_: Exception) {
+            null
+        }
+    }
     val maxVal = maxOf(budget * 1.12, months.maxOfOrNull { it.second } ?: 70000.0, 10000.0)
-    val gridColor = colors.line
-    val accentColor = colors.accent
-    val mutedBar = colors.bar
-    val warnColor = colors.warn
-    val labelArgb = colors.ink2.toArgb()
-    val boldArgb = colors.ink.toArgb()
-    val warnArgb = colors.warn.toArgb()
+    val gridColor = colorScheme.outlineVariant
+    val accentColor = colorScheme.primary
+    val mutedBar = colorScheme.surfaceContainerHighest
+    val warnColor = extendedColors.warn
+    val labelArgb = colorScheme.onSurfaceVariant.toArgb()
+    val boldArgb = colorScheme.onSurface.toArgb()
+    val warnArgb = extendedColors.warn.toArgb()
 
     Canvas(
         modifier = modifier
@@ -645,6 +1117,7 @@ fun MonthlyTrendBarChart(
             color = labelArgb
             textSize = 10.5.sp.toPx()
             textAlign = android.graphics.Paint.Align.RIGHT
+            typeface = manropeTypeface
         }
 
         val steps = 3
@@ -674,6 +1147,7 @@ fun MonthlyTrendBarChart(
             color = labelArgb
             textSize = 11.sp.toPx()
             textAlign = android.graphics.Paint.Align.CENTER
+            typeface = manropeTypeface
         }
         val boldPaint = android.graphics.Paint().apply {
             isAntiAlias = true
@@ -681,6 +1155,7 @@ fun MonthlyTrendBarChart(
             textSize = 11.sp.toPx()
             isFakeBoldText = true
             textAlign = android.graphics.Paint.Align.CENTER
+            typeface = manropeTypeface
         }
 
         months.forEachIndexed { index, (label, amount) ->
@@ -711,7 +1186,6 @@ fun MonthlyTrendBarChart(
             }
         }
 
-        // Dashed budget line
         val budgetY = topPad + chartH - ((budget / maxVal).toFloat() * chartH)
         drawLine(
             color = warnColor,
@@ -726,6 +1200,7 @@ fun MonthlyTrendBarChart(
             textSize = 10.5.sp.toPx()
             isFakeBoldText = true
             textAlign = android.graphics.Paint.Align.RIGHT
+            typeface = manropeTypeface
         }
         drawContext.canvas.nativeCanvas.drawText(
             "Budget ${(budget / 1000).toInt()}k",

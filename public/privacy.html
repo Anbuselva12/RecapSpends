@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Notice — RecapSpends</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/">
+        <span class="brand-mark">₹</span>
+        <span>RecapSpends</span>
+      </a>
+      <nav class="nav" aria-label="Legal navigation">
+        <a href="/">Overview</a>
+        <a href="/terms">Terms</a>
+        <a href="/policies">Policies</a>
+        <a class="active" href="/privacy">Privacy Notice</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <span class="badge">Privacy Notice</span>
+      <h1>Your Privacy in RecapSpends</h1>
+      <p class="subtitle">
+        How RecapSpends collects, stores, shares (only when you choose), and deletes your personal
+        and household expense information.
+      </p>
+      <div class="meta-row">
+        <span><strong>Developer Contact:</strong> anbuselvampsna@gmail.com</span>
+        <span><strong>Effective Date:</strong> November 13, 2026</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>1. Information We Collect &amp; Process</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Data Type</th>
+            <th>Where It Comes From</th>
+            <th>How It Is Stored &amp; Used</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Account Identity</td>
+            <td>Google Sign-In or Email/Password registration</td>
+            <td>Firebase Authentication stores your UID, email address, display name, and optional Google profile photo URL to isolate your account.</td>
+          </tr>
+          <tr>
+            <td>Financial &amp; Tracking Records</td>
+            <td>Manual entry, approved Review drafts, AI bill scans, vehicles, bills, projects</td>
+            <td>Stored in Cloud Firestore strictly under your authenticated UID (<code>/users/{uid}/...</code>) for syncing across your devices.</td>
+          </tr>
+          <tr>
+            <td>Unapproved Notification Drafts</td>
+            <td>Opt-in <code>NotificationListenerService</code> (debit alerts only)</td>
+            <td>Stored <strong>on-device only</strong> in Android Jetpack DataStore per UID until you approve, edit, or delete them. Never uploaded automatically.</td>
+          </tr>
+          <tr>
+            <td>Bill Images &amp; PDFs</td>
+            <td>User-selected Camera capture, Photo Picker, or PDF document</td>
+            <td>Sent over encrypted TLS to Firebase AI Logic (Gemini) with App Check verification solely to extract structured expense lines when you request a scan.</td>
+          </tr>
+          <tr>
+            <td>Family Workspace Shares</td>
+            <td>Opt-in Family Workspace membership</td>
+            <td>Non-private expenses in visible categories are copied to <code>/workspaces/{workspaceId}/expenses</code> so authorized workspace members can view shared totals.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>2. Data We Explicitly Do NOT Collect</h2>
+      <ul>
+        <li><strong>No OTPs or Security Codes:</strong> One-time passwords, PINs, MPINs, CVVs, and verification alerts are filtered out immediately in memory and never logged, saved locally, or sent to any backend.</li>
+        <li><strong>No SMS Inbox Reading:</strong> RecapSpends never accesses your SMS message database.</li>
+        <li><strong>No Ad Tracking or Data Selling:</strong> RecapSpends displays no third-party advertisements and never sells or brokers your financial records to advertisers or third parties.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>3. Security &amp; Access Controls</h2>
+      <ul>
+        <li><strong>Zero-Trust Firestore Rules:</strong> All personal subcollections require a verified Firebase Auth token matching the document owner’s UID. Cross-user reads or writes are rejected by Firestore security rules.</li>
+        <li><strong>Workspace Membership Enforcement:</strong> Workspace documents and shared expenses are readable and queryable only by users actively listed in that workspace’s verified member roster.</li>
+        <li><strong>Firebase App Check:</strong> Protects backend AI endpoints against unauthorized or tampered clients.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>4. Your Choices &amp; Controls</h2>
+      <ul>
+        <li><strong>Pause Notification Reader Anytime:</strong> Disable the toggle in <strong>Review Alerts</strong> or revoke Notification Access in Android Settings at any time.</li>
+        <li><strong>Hide Private Expenses &amp; Categories:</strong> Mark individual expenses or whole categories as hidden from your Family Workspace so they stay strictly personal.</li>
+        <li><strong>Leave or Kick Workspace Members:</strong> Leaving or removing a member immediately deletes all of their shared entries from the workspace and cuts off future sharing.</li>
+        <li><strong>Export Your Data:</strong> Export your itemized &amp; GST expense data as CSV anytime from <strong>Profile &amp; Settings</strong> or <strong>Insights</strong>.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>5. Data Retention &amp; Complete Deletion</h2>
+      <ul>
+        <li><strong>Sign-Out Behavior:</strong> Signing out clears your session and pauses notification capture while keeping any unapproved device-local Review drafts intact for your next sign-in.</li>
+        <li><strong>Delete All Data (Start Fresh):</strong> Deletes all Firestore records in your account and shared workspace entries while keeping your login active.</li>
+        <li><strong>Delete Account Permanently:</strong> Completely erases all Firestore personal records, workspace memberships/shared expenses, local device Review drafts for that UID, and your Firebase Auth login. You may also request deletion assistance by emailing <a href="mailto:anbuselvampsna@gmail.com">anbuselvampsna@gmail.com</a>.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>6. Children’s Privacy</h2>
+      <p>
+        RecapSpends is intended for personal and household financial management by individuals aged 13
+        (or the applicable minimum age in your jurisdiction) and older, and does not knowingly collect
+        personal data from young children.
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>7. Contact Us</h2>
+      <p>
+        For privacy questions, data deletion requests, or security concerns, please contact the developer
+        at <a href="mailto:anbuselvampsna@gmail.com">anbuselvampsna@gmail.com</a>.
+      </p>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>© 2026 RecapSpends</span>
+    <span>
+      <a href="/">Overview</a> · <a href="/terms">Terms</a> · <a href="/policies">Policies</a>
+    </span>
+  </footer>
+</body>
+</html>

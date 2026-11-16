@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -29,6 +28,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.DocumentScanner
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.HomeWork
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.Button
@@ -40,7 +40,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -48,31 +47,42 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.data.firebase.SampleDataSeeder
 import com.example.data.model.Bill
 import com.example.data.model.Category
 import com.example.data.model.Expense
 import com.example.data.model.Project
+import com.example.data.model.ProjectPaymentItem
+import com.example.data.model.ProjectProduct
 import com.example.data.model.ScannedBillItem
 import com.example.data.model.ServiceItem
+import com.example.data.model.ServiceStatus
+import com.example.data.model.SharedExpense
 import com.example.data.model.Vehicle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material3.IconButton
 import com.example.ui.components.CategoryTile
 import com.example.ui.components.SelavuDivider
 import com.example.ui.components.SelavuFilterChip
 import com.example.ui.components.SelavuSegmentedControl
+import com.example.ui.components.SelavuTextField
 import com.example.ui.components.StatusPill
 import com.example.ui.components.iconForKey
 import com.example.ui.theme.SelavuTheme
@@ -87,10 +97,12 @@ sealed interface ActiveSheet {
     data class AddServiceItem(val vehicleId: String) : ActiveSheet
     data object AddVehicle : ActiveSheet
     data object NewBillReminder : ActiveSheet
+    data class EditBillReminder(val bill: Bill) : ActiveSheet
     data object AddProject : ActiveSheet
     data class AddProjectPayment(val projectId: String) : ActiveSheet
     data class CategoryEdit(val category: Category?) : ActiveSheet
     data class ExpenseDetail(val expense: Expense) : ActiveSheet
+    data class SharedExpenseDetail(val sharedExpense: SharedExpense) : ActiveSheet
     data class CategoryDrilldown(val category: Category) : ActiveSheet
     data class EditScannedItem(val item: ScannedBillItem, val vehicle: Vehicle?) : ActiveSheet
     data class EditMonthlyBudget(val currentBudget: Double) : ActiveSheet
@@ -104,9 +116,16 @@ fun SelavuModalSheetHost(
     expenses: List<Expense>,
     vehicles: List<Vehicle>,
     projects: List<Project>,
+    currentUid: String = "",
+    retainedVehicleIds: Set<String> = emptySet(),
+    retainedProjectIds: Set<String> = emptySet(),
+    reviewDraftCount: Int = 0,
+    inWorkspace: Boolean = false,
     onDismiss: () -> Unit,
     onNavigateScan: () -> Unit,
     onNavigateAddExpense: (catId: String?, sub: String?) -> Unit,
+    onNavigateReview: () -> Unit = {},
+    onNavigateWorkspace: () -> Unit = {},
     onOpenAddVehicle: () -> Unit,
     onOpenNewProject: () -> Unit,
     onOpenNewReminder: () -> Unit,
@@ -115,25 +134,32 @@ fun SelavuModalSheetHost(
     onUpdateServiceInterval: (Vehicle, String, Int, Int) -> Unit,
     onDeleteServiceItem: (Vehicle, String) -> Unit,
     onAddServiceItem: (Vehicle, ServiceItem) -> Unit,
-    onCreateVehicle: (String, String, String, Int, Double) -> Unit,
+    onCreateVehicle: (String, String, String, Int, Double, Boolean) -> Unit,
     onCreateBill: (Bill) -> Unit,
-    onCreateProject: (String, Double, String) -> Unit,
-    onAddProjectPayment: (Project, Int, String, Double, String) -> Unit,
+    onUpdateBill: (Bill) -> Unit = {},
+    onDeleteBill: (String) -> Unit = {},
+    onCreateProject: (String, Double, String, Boolean) -> Unit,
+    onAddProjectPayment: (Project, Int, String, Double, String, List<ProjectPaymentItem>, List<ProjectProduct>?) -> Unit,
     onSaveCategory: (Category) -> Unit,
     onDeleteCategory: (String) -> Unit,
+    onToggleExpensePrivacy: (Expense) -> Unit = {},
+    onEditExpense: (Expense) -> Unit = {},
+    onDeleteExpense: (String) -> Unit = {},
+    onDeleteRetainedExpense: (SharedExpense) -> Unit = {},
     onUpdateScannedItem: (Int, ScannedBillItem) -> Unit,
     onUpdateBudget: (Double) -> Unit,
     onShowToast: (String) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
+    val extendedColors = SelavuTheme.extendedColors
     val strings = selavuStrings()
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = colors.surface,
-        contentColor = colors.ink
+        containerColor = colorScheme.surface,
+        contentColor = colorScheme.onSurface
     ) {
         Column(
             modifier = Modifier
@@ -146,7 +172,7 @@ fun SelavuModalSheetHost(
         ) {
             when (activeSheet) {
                 is ActiveSheet.QuickAddHub -> {
-                    Text("Quick add", style = MaterialTheme.typography.headlineMedium, color = colors.ink)
+                    Text("Quick add", style = MaterialTheme.typography.headlineMedium, color = colorScheme.onSurface)
                     SheetActionRow(
                         icon = Icons.Filled.DocumentScanner,
                         title = strings.scanBill,
@@ -172,13 +198,26 @@ fun SelavuModalSheetHost(
                         subtitle = "Recurring or one-off bill with alert",
                         onClick = onOpenNewReminder
                     )
+                    SheetActionRow(
+                        icon = Icons.Filled.NotificationsActive,
+                        title = strings.reviewAlerts,
+                        subtitle = "Approve or map notification expense alerts",
+                        badge = if (reviewDraftCount > 0) "$reviewDraftCount" else null,
+                        onClick = { onDismiss(); onNavigateReview() }
+                    )
+                    SheetActionRow(
+                        icon = Icons.Filled.Groups,
+                        title = strings.familyWorkspace,
+                        subtitle = if (inWorkspace) "Manage shared workspace & members" else "Share expenses with family",
+                        onClick = { onDismiss(); onNavigateWorkspace() }
+                    )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         OutlinedButton(
                             onClick = onOpenAddVehicle,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = MaterialTheme.shapes.small,
                             modifier = Modifier.weight(1f).height(46.dp)
                         ) {
                             Icon(Icons.Filled.DirectionsBike, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -187,7 +226,7 @@ fun SelavuModalSheetHost(
                         }
                         OutlinedButton(
                             onClick = onOpenNewProject,
-                            shape = RoundedCornerShape(12.dp),
+                            shape = MaterialTheme.shapes.small,
                             modifier = Modifier.weight(1f).height(46.dp)
                         ) {
                             Icon(Icons.Filled.HomeWork, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -205,14 +244,13 @@ fun SelavuModalSheetHost(
                         Text(
                             text = "${vehicle.name} · current ${IndianFormatters.formatIndianInteger(vehicle.odometer.toLong())} km",
                             style = MaterialTheme.typography.bodySmall,
-                            color = colors.ink2
+                            color = colorScheme.onSurfaceVariant
                         )
-                        OutlinedTextField(
+                        SelavuTextField(
                             value = odoText,
                             onValueChange = { if (it.all(Char::isDigit)) odoText = it },
-                            label = { Text("New odometer reading (km)") },
+                            label = "New odometer reading (km)",
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true,
                             modifier = Modifier.fillMaxWidth().testTag("odo_sheet_input")
                         )
                         Button(
@@ -225,8 +263,8 @@ fun SelavuModalSheetHost(
                                     onDismiss()
                                 }
                             },
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = colors.accent, contentColor = colors.onAccent),
+                            shape = MaterialTheme.shapes.medium,
+                            colors = ButtonDefaults.buttonColors(containerColor = colorScheme.primary, contentColor = colorScheme.onPrimary),
                             modifier = Modifier.fillMaxWidth().height(48.dp)
                         ) { Text("Save odometer") }
                     }
@@ -249,15 +287,15 @@ fun SelavuModalSheetHost(
                             Text(item.name, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
                             StatusPill(state.statusLabel, status = state.status)
                         }
-                        Text(state.nextDueLabel, style = MaterialTheme.typography.bodyMedium, color = colors.ink2)
+                        Text(state.nextDueLabel, style = MaterialTheme.typography.bodyMedium, color = colorScheme.onSurfaceVariant)
 
                         Button(
                             onClick = {
                                 onMarkServiceDone(vehicle, item.id)
                                 onDismiss()
                             },
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = colors.accent, contentColor = colors.onAccent),
+                            shape = MaterialTheme.shapes.medium,
+                            colors = ButtonDefaults.buttonColors(containerColor = colorScheme.primary, contentColor = colorScheme.onPrimary),
                             modifier = Modifier.fillMaxWidth().height(48.dp).testTag("mark_service_done_btn")
                         ) {
                             Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -268,20 +306,18 @@ fun SelavuModalSheetHost(
                         SelavuDivider()
                         Text("Edit service interval", style = MaterialTheme.typography.titleMedium)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(
+                            SelavuTextField(
                                 value = kmText,
                                 onValueChange = { if (it.all(Char::isDigit)) kmText = it },
-                                label = { Text("Every km (0 = date only)") },
+                                label = "Every km (0 = date only)",
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
                                 modifier = Modifier.weight(1f)
                             )
-                            OutlinedTextField(
+                            SelavuTextField(
                                 value = moText,
                                 onValueChange = { if (it.all(Char::isDigit)) moText = it },
-                                label = { Text("Every months") },
+                                label = "Every months",
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -293,7 +329,7 @@ fun SelavuModalSheetHost(
                                     onUpdateServiceInterval(vehicle, item.id, km, mo)
                                     onDismiss()
                                 },
-                                shape = RoundedCornerShape(12.dp),
+                                shape = MaterialTheme.shapes.small,
                                 modifier = Modifier.weight(1f).height(46.dp)
                             ) { Text("Save interval") }
 
@@ -306,8 +342,8 @@ fun SelavuModalSheetHost(
                                         onDismiss()
                                     }
                                 },
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.bad),
+                                shape = MaterialTheme.shapes.small,
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.error),
                                 modifier = Modifier.weight(1f).height(46.dp)
                             ) {
                                 Icon(Icons.Filled.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -330,7 +366,7 @@ fun SelavuModalSheetHost(
 
                         Text("Add service item", style = MaterialTheme.typography.headlineMedium)
                         if (suggestions.isNotEmpty()) {
-                            Text("Suggested extras for ${vehicle.shortName}", style = MaterialTheme.typography.bodySmall, color = colors.ink2)
+                            Text("Suggested extras for ${vehicle.shortName}", style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 suggestions.forEach { sug ->
                                     SelavuFilterChip(
@@ -345,28 +381,25 @@ fun SelavuModalSheetHost(
                                 }
                             }
                         }
-                        OutlinedTextField(
+                        SelavuTextField(
                             value = name,
                             onValueChange = { name = it },
-                            label = { Text("Item name") },
-                            singleLine = true,
+                            label = "Item name",
                             modifier = Modifier.fillMaxWidth()
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(
+                            SelavuTextField(
                                 value = kmText,
                                 onValueChange = { if (it.all(Char::isDigit)) kmText = it },
-                                label = { Text("Km (0 = date only)") },
+                                label = "Km (0 = date only)",
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
                                 modifier = Modifier.weight(1f)
                             )
-                            OutlinedTextField(
+                            SelavuTextField(
                                 value = moText,
                                 onValueChange = { if (it.all(Char::isDigit)) moText = it },
-                                label = { Text("Months") },
+                                label = "Months",
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -389,8 +422,8 @@ fun SelavuModalSheetHost(
                                     onDismiss()
                                 }
                             },
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = colors.accent, contentColor = colors.onAccent),
+                            shape = MaterialTheme.shapes.medium,
+                            colors = ButtonDefaults.buttonColors(containerColor = colorScheme.primary, contentColor = colorScheme.onPrimary),
                             modifier = Modifier.fillMaxWidth().height(48.dp)
                         ) { Text("Start tracking") }
                     }
@@ -402,6 +435,7 @@ fun SelavuModalSheetHost(
                     var plate by remember { mutableStateOf("") }
                     var odo by remember { mutableStateOf("") }
                     var mileage by remember { mutableStateOf("") }
+                    var hiddenFromWorkspace by remember { mutableStateOf(false) }
 
                     Text(strings.addVehicle, style = MaterialTheme.typography.headlineMedium)
                     SelavuSegmentedControl(
@@ -409,39 +443,57 @@ fun SelavuModalSheetHost(
                         selectedKey = type,
                         onSelect = { type = it }
                     )
-                    OutlinedTextField(
+                    SelavuTextField(
                         value = name,
                         onValueChange = { name = it },
-                        label = { Text("Make & model") },
-                        placeholder = { Text("e.g. Honda Activa 6G, Hyundai Creta") },
-                        singleLine = true,
+                        label = "Make & model",
+                        placeholder = "e.g. Honda Activa 6G, Hyundai Creta",
                         modifier = Modifier.fillMaxWidth().testTag("new_vehicle_name")
                     )
-                    OutlinedTextField(
+                    SelavuTextField(
                         value = plate,
                         onValueChange = { plate = it.uppercase() },
-                        label = { Text("Registration plate") },
-                        placeholder = { Text("TN 09 CD 1234") },
-                        singleLine = true,
+                        label = "Registration plate",
+                        placeholder = "TN 09 CD 1234",
                         modifier = Modifier.fillMaxWidth()
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
+                        SelavuTextField(
                             value = odo,
                             onValueChange = { if (it.all(Char::isDigit)) odo = it },
-                            label = { Text("Odometer (km)") },
+                            label = "Odometer (km)",
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true,
                             modifier = Modifier.weight(1f)
                         )
-                        OutlinedTextField(
+                        SelavuTextField(
                             value = mileage,
                             onValueChange = { if (it.isEmpty() || it.matches(Regex("^\\d*\\.?\\d?$"))) mileage = it },
-                            label = { Text("Avg km/l") },
+                            label = "Avg km/l",
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            singleLine = true,
                             modifier = Modifier.weight(1f)
                         )
+                    }
+                    if (inWorkspace) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text("Hide from Family Workspace", style = MaterialTheme.typography.labelLarge)
+                                Text(
+                                    text = "Keep this vehicle and its service alerts private to you",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = hiddenFromWorkspace,
+                                onCheckedChange = { hiddenFromWorkspace = it },
+                                colors = SwitchDefaults.colors(checkedTrackColor = colorScheme.primary),
+                                modifier = Modifier.testTag("add_vehicle_hidden_switch")
+                            )
+                        }
                     }
                     Button(
                         onClick = {
@@ -453,13 +505,14 @@ fun SelavuModalSheetHost(
                                     type,
                                     plate.trim(),
                                     odo.toIntOrNull() ?: 0,
-                                    mileage.toDoubleOrNull() ?: if (type == "car") 16.0 else 40.0
+                                    mileage.toDoubleOrNull() ?: if (type == "car") 16.0 else 40.0,
+                                    hiddenFromWorkspace
                                 )
                                 onDismiss()
                             }
                         },
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = colors.accent, contentColor = colors.onAccent),
+                        shape = MaterialTheme.shapes.medium,
+                        colors = ButtonDefaults.buttonColors(containerColor = colorScheme.primary, contentColor = colorScheme.onPrimary),
                         modifier = Modifier.fillMaxWidth().height(48.dp).testTag("create_vehicle_btn")
                     ) { Text("Create with default checklist") }
                 }
@@ -474,6 +527,7 @@ fun SelavuModalSheetHost(
                     var reminder by remember { mutableStateOf("3 days before") }
                     var catId by remember { mutableStateOf("util") }
                     var autopay by remember { mutableStateOf(false) }
+                    var hiddenFromWorkspace by remember { mutableStateOf(false) }
 
                     if (showPicker) {
                         val pickerState = rememberDatePickerState(initialSelectedDateMillis = dueMs)
@@ -490,20 +544,18 @@ fun SelavuModalSheetHost(
                     }
 
                     Text(strings.newReminder, style = MaterialTheme.typography.headlineMedium)
-                    OutlinedTextField(
+                    SelavuTextField(
                         value = name,
                         onValueChange = { name = it },
-                        label = { Text("Bill title") },
-                        placeholder = { Text("e.g. BESCOM electricity, Broadband") },
-                        singleLine = true,
+                        label = "Bill title",
+                        placeholder = "e.g. BESCOM electricity, Broadband",
                         modifier = Modifier.fillMaxWidth().testTag("new_bill_name")
                     )
-                    OutlinedTextField(
+                    SelavuTextField(
                         value = amount,
                         onValueChange = { if (it.isEmpty() || it.matches(Regex("^\\d*\\.?\\d{0,2}$"))) amount = it },
-                        label = { Text("Amount (₹)") },
+                        label = "Amount (₹)",
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("new_bill_amount")
                     )
                     Text("Due date: ${IndianFormatters.formatDate(dueMs)}", style = MaterialTheme.typography.labelLarge)
@@ -526,7 +578,7 @@ fun SelavuModalSheetHost(
                     }
                     Text("Category", style = MaterialTheme.typography.labelLarge)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        categories.take(6).forEach { cat ->
+                        categories.take(8).forEach { cat ->
                             SelavuFilterChip(cat.name.substringBefore(" & "), catId == cat.id, { catId = cat.id })
                         }
                     }
@@ -536,7 +588,29 @@ fun SelavuModalSheetHost(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("Autopay enabled", style = MaterialTheme.typography.bodyMedium)
-                        Switch(checked = autopay, onCheckedChange = { autopay = it }, colors = SwitchDefaults.colors(checkedTrackColor = colors.accent))
+                        Switch(checked = autopay, onCheckedChange = { autopay = it }, colors = SwitchDefaults.colors(checkedTrackColor = colorScheme.primary))
+                    }
+                    if (inWorkspace) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text("Hide from Family Workspace", style = MaterialTheme.typography.labelLarge)
+                                Text(
+                                    text = "Keep this bill reminder private to you",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = hiddenFromWorkspace,
+                                onCheckedChange = { hiddenFromWorkspace = it },
+                                colors = SwitchDefaults.colors(checkedTrackColor = colorScheme.primary),
+                                modifier = Modifier.testTag("new_bill_hidden_switch")
+                            )
+                        }
                     }
                     Button(
                         onClick = {
@@ -554,38 +628,185 @@ fun SelavuModalSheetHost(
                                         reminder = reminder,
                                         categoryId = catId,
                                         iconKey = catIcon,
-                                        autopay = autopay
+                                        autopay = autopay,
+                                        hiddenFromWorkspace = hiddenFromWorkspace
                                     )
                                 )
                                 onDismiss()
                             }
                         },
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = colors.accent, contentColor = colors.onAccent),
+                        shape = MaterialTheme.shapes.medium,
+                        colors = ButtonDefaults.buttonColors(containerColor = colorScheme.primary, contentColor = colorScheme.onPrimary),
                         modifier = Modifier.fillMaxWidth().height(48.dp).testTag("save_bill_btn")
                     ) { Text("Save bill reminder") }
+                }
+
+                is ActiveSheet.EditBillReminder -> {
+                    val existing = activeSheet.bill
+                    var name by remember(existing.id) { mutableStateOf(existing.name) }
+                    var amount by remember(existing.id) {
+                        mutableStateOf(
+                            if (existing.amount % 1.0 == 0.0) existing.amount.toInt().toString()
+                            else "%.2f".format(existing.amount)
+                        )
+                    }
+                    var dueMs by remember(existing.id) { mutableStateOf(existing.dueEpochMs) }
+                    var showPicker by remember { mutableStateOf(false) }
+                    var repeat by remember(existing.id) { mutableStateOf(existing.repeat) }
+                    var reminder by remember(existing.id) { mutableStateOf(existing.reminder) }
+                    var catId by remember(existing.id) { mutableStateOf(existing.categoryId) }
+                    var autopay by remember(existing.id) { mutableStateOf(existing.autopay) }
+                    var hiddenFromWorkspace by remember(existing.id) { mutableStateOf(existing.hiddenFromWorkspace) }
+                    var confirmDelete by remember(existing.id) { mutableStateOf(false) }
+
+                    if (showPicker) {
+                        val pickerState = rememberDatePickerState(initialSelectedDateMillis = dueMs)
+                        DatePickerDialog(
+                            onDismissRequest = { showPicker = false },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    pickerState.selectedDateMillis?.let { dueMs = it }
+                                    showPicker = false
+                                }) { Text("OK") }
+                            },
+                            dismissButton = { TextButton(onClick = { showPicker = false }) { Text("Cancel") } }
+                        ) { DatePicker(state = pickerState) }
+                    }
+
+                    Text("Edit bill reminder", style = MaterialTheme.typography.headlineMedium)
+                    SelavuTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = "Bill title",
+                        modifier = Modifier.fillMaxWidth().testTag("edit_bill_name")
+                    )
+                    SelavuTextField(
+                        value = amount,
+                        onValueChange = { if (it.isEmpty() || it.matches(Regex("^\\d*\\.?\\d{0,2}$"))) amount = it },
+                        label = "Amount (₹)",
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth().testTag("edit_bill_amount")
+                    )
+                    Text("Due date: ${IndianFormatters.formatDate(dueMs)}", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val nowMs = remember { System.currentTimeMillis() }
+                        SelavuFilterChip("In 3 days", IndianFormatters.sameDay(dueMs, IndianFormatters.addDays(nowMs, 3)), { dueMs = IndianFormatters.addDays(nowMs, 3) })
+                        SelavuFilterChip("In 7 days", IndianFormatters.sameDay(dueMs, IndianFormatters.addDays(nowMs, 7)), { dueMs = IndianFormatters.addDays(nowMs, 7) })
+                        SelavuFilterChip("Pick date", false, { showPicker = true }, icon = Icons.Filled.CalendarMonth)
+                    }
+                    Text("Repeat", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("Once", "Monthly", "Bi-monthly", "Half-yearly", "Yearly").forEach { r ->
+                            SelavuFilterChip(r, repeat == r, { repeat = r })
+                        }
+                    }
+                    Text("Remind me", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("On the day", "3 days before", "7 days before").forEach { rem ->
+                            SelavuFilterChip(rem, reminder == rem, { reminder = rem })
+                        }
+                    }
+                    Text("Category", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        categories.take(8).forEach { cat ->
+                            SelavuFilterChip(cat.name.substringBefore(" & "), catId == cat.id, { catId = cat.id })
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Autopay enabled", style = MaterialTheme.typography.bodyMedium)
+                        Switch(checked = autopay, onCheckedChange = { autopay = it }, colors = SwitchDefaults.colors(checkedTrackColor = colorScheme.primary))
+                    }
+                    if (inWorkspace || hiddenFromWorkspace) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text("Hide from Family Workspace", style = MaterialTheme.typography.labelLarge)
+                                Text(
+                                    text = "Keep this bill reminder private to you",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = hiddenFromWorkspace,
+                                onCheckedChange = { hiddenFromWorkspace = it },
+                                colors = SwitchDefaults.colors(checkedTrackColor = colorScheme.primary),
+                                modifier = Modifier.testTag("edit_bill_hidden_switch")
+                            )
+                        }
+                    }
+                    Button(
+                        onClick = {
+                            val amt = amount.toDoubleOrNull()
+                            if (name.isBlank() || amt == null || amt <= 0.0) {
+                                onShowToast("Enter bill title and valid amount")
+                            } else {
+                                val catIcon = categories.firstOrNull { it.id == catId }?.iconKey ?: existing.iconKey
+                                onUpdateBill(
+                                    existing.copy(
+                                        name = name.trim(),
+                                        amount = amt,
+                                        dueEpochMs = dueMs,
+                                        repeat = repeat,
+                                        reminder = reminder,
+                                        categoryId = catId,
+                                        iconKey = catIcon,
+                                        autopay = autopay,
+                                        hiddenFromWorkspace = hiddenFromWorkspace
+                                    )
+                                )
+                                onDismiss()
+                            }
+                        },
+                        shape = MaterialTheme.shapes.medium,
+                        colors = ButtonDefaults.buttonColors(containerColor = colorScheme.primary, contentColor = colorScheme.onPrimary),
+                        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("update_bill_btn")
+                    ) { Text("Save changes") }
+                    OutlinedButton(
+                        onClick = {
+                            if (!confirmDelete) {
+                                confirmDelete = true
+                            } else {
+                                onDeleteBill(existing.id)
+                                onDismiss()
+                            }
+                        },
+                        shape = MaterialTheme.shapes.small,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.error),
+                        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("delete_bill_btn")
+                    ) {
+                        Icon(Icons.Filled.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (confirmDelete) "Tap again to delete reminder" else "Delete reminder")
+                    }
                 }
 
                 is ActiveSheet.AddProject -> {
                     var name by remember { mutableStateOf("") }
                     var budget by remember { mutableStateOf("") }
                     var template by remember { mutableStateOf("House build") }
+                    var hiddenFromWorkspace by remember { mutableStateOf(false) }
 
                     Text(strings.newProject, style = MaterialTheme.typography.headlineMedium)
-                    OutlinedTextField(
+                    SelavuTextField(
                         value = name,
                         onValueChange = { name = it },
-                        label = { Text("Project name") },
-                        placeholder = { Text("e.g. Madurai House, Bakery Launch") },
-                        singleLine = true,
+                        label = "Project name",
+                        placeholder = "e.g. Madurai House, Bakery Launch",
                         modifier = Modifier.fillMaxWidth()
                     )
-                    OutlinedTextField(
+                    SelavuTextField(
                         value = budget,
                         onValueChange = { if (it.all(Char::isDigit)) budget = it },
-                        label = { Text("Total budget (₹)") },
+                        label = "Total budget (₹)",
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
                     Text("Phase template", style = MaterialTheme.typography.labelLarge)
@@ -594,18 +815,40 @@ fun SelavuModalSheetHost(
                             SelavuFilterChip(t, template == t, { template = t })
                         }
                     }
+                    if (inWorkspace) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text("Hide from Family Workspace", style = MaterialTheme.typography.labelLarge)
+                                Text(
+                                    text = "Keep this project private to your Individual account",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = hiddenFromWorkspace,
+                                onCheckedChange = { hiddenFromWorkspace = it },
+                                colors = SwitchDefaults.colors(checkedTrackColor = colorScheme.primary),
+                                modifier = Modifier.testTag("add_project_hidden_switch")
+                            )
+                        }
+                    }
                     Button(
                         onClick = {
                             val b = budget.toDoubleOrNull()
                             if (name.isBlank() || b == null || b <= 0.0) {
                                 onShowToast("Enter project name and budget")
                             } else {
-                                onCreateProject(name.trim(), b, template)
+                                onCreateProject(name.trim(), b, template, hiddenFromWorkspace)
                                 onDismiss()
                             }
                         },
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = colors.accent, contentColor = colors.onAccent),
+                        shape = MaterialTheme.shapes.medium,
+                        colors = ButtonDefaults.buttonColors(containerColor = colorScheme.primary, contentColor = colorScheme.onPrimary),
                         modifier = Modifier.fillMaxWidth().height(48.dp)
                     ) { Text("Create project") }
                 }
@@ -616,7 +859,49 @@ fun SelavuModalSheetHost(
                         var phaseIdx by remember { mutableIntStateOf(0) }
                         var title by remember { mutableStateOf("") }
                         var amount by remember { mutableStateOf("") }
+                        var lastAutoAmount by remember { mutableStateOf("") }
                         var vendor by remember { mutableStateOf(project.vendors.firstOrNull()?.name.orEmpty()) }
+
+                        val catalog = remember(project.id) {
+                            mutableStateListOf<ProjectProduct>().apply {
+                                addAll(project.effectiveProductCatalog())
+                            }
+                        }
+                        var catalogDirty by remember(project.id) { mutableStateOf(false) }
+
+                        data class DraftPayLine(
+                            val id: String = UUID.randomUUID().toString(),
+                            val productId: String,
+                            val name: String,
+                            val unit: String,
+                            val qtyText: String = "",
+                            val unitPriceText: String = ""
+                        )
+
+                        val lineItems = remember(project.id) { mutableStateListOf<DraftPayLine>() }
+
+                        var showNewProductForm by remember { mutableStateOf(false) }
+                        var newProdName by remember { mutableStateOf("") }
+                        var newProdUnit by remember { mutableStateOf("count") }
+
+                        val computedLinesTotal = lineItems.sumOf { line ->
+                            val q = line.qtyText.toDoubleOrNull() ?: 0.0
+                            val p = line.unitPriceText.toDoubleOrNull() ?: 0.0
+                            q * p
+                        }
+                        val formattedLinesTotal = if (computedLinesTotal > 0.0) {
+                            if (computedLinesTotal % 1.0 == 0.0) computedLinesTotal.toInt().toString()
+                            else "%.2f".format(computedLinesTotal)
+                        } else ""
+
+                        LaunchedEffect(formattedLinesTotal, lineItems.size) {
+                            if (lineItems.isNotEmpty() && formattedLinesTotal.isNotEmpty() &&
+                                (amount.isBlank() || amount == lastAutoAmount)
+                            ) {
+                                amount = formattedLinesTotal
+                                lastAutoAmount = formattedLinesTotal
+                            }
+                        }
 
                         Text("Record project payment", style = MaterialTheme.typography.headlineMedium)
                         Text("Phase", style = MaterialTheme.typography.labelLarge)
@@ -633,48 +918,297 @@ fun SelavuModalSheetHost(
                                 }
                             }
                         }
-                        OutlinedTextField(
+                        SelavuTextField(
                             value = vendor,
                             onValueChange = { vendor = it },
-                            label = { Text("Vendor name") },
-                            singleLine = true,
+                            label = "Vendor name",
                             modifier = Modifier.fillMaxWidth()
                         )
-                        OutlinedTextField(
+                        SelavuTextField(
                             value = title,
                             onValueChange = { title = it },
-                            label = { Text("Payment description") },
-                            placeholder = { Text("e.g. River sand 2 loads") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
+                            label = "Payment description",
+                            placeholder = "e.g. Bricks & cement delivery",
+                            modifier = Modifier.fillMaxWidth().testTag("project_payment_title_input")
                         )
-                        OutlinedTextField(
+
+                        SelavuDivider()
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Granular materials / products", style = MaterialTheme.typography.labelLarge)
+                                Text(
+                                    text = "Qty × Price with product units (count, per kg, per bag…)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                            TextButton(
+                                onClick = {
+                                    val defaultProd = catalog.firstOrNull() ?: ProjectProduct("item", "Material", "count")
+                                    lineItems += DraftPayLine(
+                                        productId = defaultProd.id,
+                                        name = defaultProd.name,
+                                        unit = defaultProd.unit
+                                    )
+                                },
+                                modifier = Modifier.testTag("add_project_line_item_btn")
+                            ) {
+                                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Add item")
+                            }
+                        }
+
+                        if (showNewProductForm) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(MaterialTheme.shapes.medium)
+                                    .background(colorScheme.surfaceVariant)
+                                    .padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Add new product & unit", style = MaterialTheme.typography.labelLarge)
+                                    IconButton(onClick = { showNewProductForm = false }, modifier = Modifier.size(48.dp)) {
+                                        Icon(Icons.Filled.Close, contentDescription = "Close new product form", modifier = Modifier.size(18.dp))
+                                    }
+                                }
+                                SelavuTextField(
+                                    value = newProdName,
+                                    onValueChange = { newProdName = it },
+                                    label = "Product name",
+                                    placeholder = "e.g. TMT Bars, Plumbing Pipes",
+                                    modifier = Modifier.fillMaxWidth().testTag("new_project_product_name")
+                                )
+                                Text("Unit type", style = MaterialTheme.typography.labelMedium)
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Project.commonUnits.forEach { u ->
+                                        SelavuFilterChip(u, newProdUnit == u, { newProdUnit = u })
+                                    }
+                                }
+                                SelavuTextField(
+                                    value = newProdUnit,
+                                    onValueChange = { newProdUnit = it },
+                                    label = "Custom unit",
+                                    placeholder = "e.g. count, per kg, per bag",
+                                    modifier = Modifier.fillMaxWidth().testTag("new_project_product_unit")
+                                )
+                                Button(
+                                    onClick = {
+                                        val cleanName = newProdName.trim()
+                                        val cleanUnit = newProdUnit.trim().ifBlank { "count" }
+                                        if (cleanName.isBlank()) {
+                                            onShowToast("Enter product name")
+                                        } else {
+                                            val newProd = ProjectProduct(
+                                                id = cleanName.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+                                                    .ifBlank { UUID.randomUUID().toString().take(6) },
+                                                name = cleanName,
+                                                unit = cleanUnit
+                                            )
+                                            catalog += newProd
+                                            catalogDirty = true
+                                            lineItems += DraftPayLine(
+                                                productId = newProd.id,
+                                                name = newProd.name,
+                                                unit = newProd.unit
+                                            )
+                                            newProdName = ""
+                                            newProdUnit = "count"
+                                            showNewProductForm = false
+                                        }
+                                    },
+                                    shape = MaterialTheme.shapes.small,
+                                    modifier = Modifier.fillMaxWidth().height(48.dp).testTag("save_inline_project_product_btn")
+                                ) {
+                                    Text("Save product & add line")
+                                }
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = { showNewProductForm = true },
+                                shape = MaterialTheme.shapes.small,
+                                modifier = Modifier.fillMaxWidth().height(48.dp).testTag("open_new_product_inline_btn")
+                            ) {
+                                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("New product & unit type")
+                            }
+                        }
+
+                        lineItems.forEachIndexed { idx, line ->
+                            val qtyVal = line.qtyText.toDoubleOrNull() ?: 0.0
+                            val priceVal = line.unitPriceText.toDoubleOrNull() ?: 0.0
+                            val lineTotal = qtyVal * priceVal
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(MaterialTheme.shapes.medium)
+                                    .border(1.dp, colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+                                    .padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "${line.name} (${line.unit})",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = colorScheme.onSurface
+                                    )
+                                    IconButton(
+                                        onClick = { lineItems.removeAt(idx) },
+                                        modifier = Modifier.size(48.dp)
+                                    ) {
+                                        Icon(Icons.Filled.DeleteOutline, contentDescription = "Remove line", tint = colorScheme.error, modifier = Modifier.size(18.dp))
+                                    }
+                                }
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    catalog.forEach { prod ->
+                                        SelavuFilterChip(
+                                            label = "${prod.name} · ${prod.unit}",
+                                            selected = line.productId == prod.id && line.name == prod.name,
+                                            onClick = {
+                                                lineItems[idx] = line.copy(
+                                                    productId = prod.id,
+                                                    name = prod.name,
+                                                    unit = prod.unit
+                                                )
+                                            }
+                                        )
+                                    }
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    SelavuTextField(
+                                        value = line.qtyText,
+                                        onValueChange = { input ->
+                                            if (input.isEmpty() || input.matches(Regex("^\\d*\\.?\\d{0,2}$"))) {
+                                                lineItems[idx] = line.copy(qtyText = input)
+                                            }
+                                        },
+                                        label = "Qty (${line.unit})",
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    SelavuTextField(
+                                        value = line.unitPriceText,
+                                        onValueChange = { input ->
+                                            if (input.isEmpty() || input.matches(Regex("^\\d*\\.?\\d{0,2}$"))) {
+                                                lineItems[idx] = line.copy(unitPriceText = input)
+                                            }
+                                        },
+                                        label = "Price ₹ / ${line.unit}",
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "${line.qtyText.ifBlank { "0" }} ${line.unit} × ₹${line.unitPriceText.ifBlank { "0" }}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "= ${IndianFormatters.formatInr(lineTotal, 2)}",
+                                        style = SelavuTheme.textStyles.numericBody,
+                                        color = colorScheme.onPrimaryContainer
+                                    )
+                                }
+                            }
+                        }
+
+                        if (computedLinesTotal > 0.0) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(MaterialTheme.shapes.small)
+                                    .background(colorScheme.primaryContainer)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Items total (${lineItems.size} lines)",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = colorScheme.onPrimaryContainer
+                                )
+                                Text(
+                                    text = IndianFormatters.formatInr(computedLinesTotal, 2),
+                                    style = SelavuTheme.textStyles.numericTitle,
+                                    color = colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
+
+                        SelavuTextField(
                             value = amount,
                             onValueChange = { if (it.isEmpty() || it.matches(Regex("^\\d*\\.?\\d{0,2}$"))) amount = it },
-                            label = { Text("Amount (₹)") },
+                            label = "Total payment amount (₹)",
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth().testTag("project_payment_amount_input")
                         )
                         Button(
                             onClick = {
-                                val amt = amount.toDoubleOrNull()
+                                val mappedItems = lineItems.mapNotNull { l ->
+                                    val q = l.qtyText.toDoubleOrNull() ?: 0.0
+                                    val p = l.unitPriceText.toDoubleOrNull() ?: 0.0
+                                    if (q > 0.0 && p >= 0.0) {
+                                        ProjectPaymentItem(
+                                            productId = l.productId,
+                                            name = l.name,
+                                            unit = l.unit,
+                                            qty = q,
+                                            unitPrice = p,
+                                            totalPrice = q * p
+                                        )
+                                    } else null
+                                }
+                                val amt = amount.toDoubleOrNull() ?: computedLinesTotal.takeIf { it > 0.0 }
                                 if (amt == null || amt <= 0.0) {
-                                    onShowToast("Enter valid amount")
+                                    onShowToast("Enter valid amount or item quantities")
                                 } else {
+                                    val fallbackTitle = title.trim().ifBlank {
+                                        if (mappedItems.isNotEmpty()) {
+                                            mappedItems.joinToString(", ") { it.name }.take(80)
+                                        } else {
+                                            "Stage payment"
+                                        }
+                                    }
                                     onAddProjectPayment(
                                         project,
                                         phaseIdx,
-                                        title.trim().ifBlank { "Stage payment" },
+                                        fallbackTitle,
                                         amt,
-                                        vendor.trim().ifBlank { "—" }
+                                        vendor.trim().ifBlank { "—" },
+                                        mappedItems,
+                                        if (catalogDirty || project.productCatalog.isEmpty()) catalog.toList() else null
                                     )
                                     onDismiss()
                                 }
                             },
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = colors.accent, contentColor = colors.onAccent),
-                            modifier = Modifier.fillMaxWidth().height(48.dp)
+                            shape = MaterialTheme.shapes.medium,
+                            colors = ButtonDefaults.buttonColors(containerColor = colorScheme.primary, contentColor = colorScheme.onPrimary),
+                            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("save_project_payment_btn")
                         ) { Text("Save payment") }
                     }
                 }
@@ -686,14 +1220,14 @@ fun SelavuModalSheetHost(
                     var iconKey by remember { mutableStateOf(existing?.iconKey ?: "tag") }
                     var colorIdx by remember { mutableIntStateOf(existing?.colorIndex ?: 1) }
                     var subsText by remember { mutableStateOf(existing?.subcategories?.joinToString(", ").orEmpty()) }
+                    var hiddenFromWorkspace by remember { mutableStateOf(existing?.hiddenFromWorkspace ?: false) }
                     var confirmDelete by remember { mutableStateOf(false) }
 
                     Text(if (isEdit) "Edit category" else strings.newCategory, style = MaterialTheme.typography.headlineMedium)
-                    OutlinedTextField(
+                    SelavuTextField(
                         value = name,
                         onValueChange = { name = it },
-                        label = { Text("Category name") },
-                        singleLine = true,
+                        label = "Category name",
                         modifier = Modifier.fillMaxWidth()
                     )
                     Text("Icon", style = MaterialTheme.typography.labelLarge)
@@ -703,13 +1237,13 @@ fun SelavuModalSheetHost(
                             Box(
                                 modifier = Modifier
                                     .size(44.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(if (selected) colors.accentSoft else colors.sunk)
-                                    .border(1.dp, if (selected) colors.accent else colors.line, RoundedCornerShape(12.dp))
+                                    .clip(MaterialTheme.shapes.small)
+                                    .background(if (selected) colorScheme.primaryContainer else colorScheme.surfaceVariant)
+                                    .border(1.dp, if (selected) colorScheme.primary else colorScheme.outlineVariant, MaterialTheme.shapes.small)
                                     .clickable { iconKey = k },
                                 contentAlignment = Alignment.Center
                             ) {
-                                Icon(iconForKey(k), contentDescription = k, tint = if (selected) colors.accentInk else colors.ink2)
+                                Icon(iconForKey(k), contentDescription = k, tint = if (selected) colorScheme.onPrimaryContainer else colorScheme.onSurfaceVariant)
                             }
                         }
                     }
@@ -721,22 +1255,43 @@ fun SelavuModalSheetHost(
                                 modifier = Modifier
                                     .size(28.dp)
                                     .clip(CircleShape)
-                                    .background(colors.categoryColor(idx))
+                                    .background(extendedColors.categoryColor(idx))
                                     .then(
-                                        if (selected) Modifier.border(3.dp, colors.ink, CircleShape)
+                                        if (selected) Modifier.border(3.dp, colorScheme.onSurface, CircleShape)
                                         else Modifier
                                     )
                                     .clickable { colorIdx = idx }
                             )
                         }
                     }
-                    OutlinedTextField(
+                    SelavuTextField(
                         value = subsText,
                         onValueChange = { subsText = it },
-                        label = { Text("Sub-categories (comma separated)") },
-                        placeholder = { Text("e.g. Tuition, Books, Uniform") },
+                        label = "Sub-categories (comma separated)",
+                        placeholder = "e.g. Tuition, Books, Uniform",
+                        singleLine = false,
                         modifier = Modifier.fillMaxWidth()
                     )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text("Hide category from Family Workspace", style = MaterialTheme.typography.labelLarge)
+                            Text(
+                                text = "Expenses in this category stay private to your Individual account",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = hiddenFromWorkspace,
+                            onCheckedChange = { hiddenFromWorkspace = it },
+                            colors = SwitchDefaults.colors(checkedTrackColor = colorScheme.primary),
+                            modifier = Modifier.testTag("category_hidden_workspace_switch")
+                        )
+                    }
                     Button(
                         onClick = {
                             if (name.isBlank()) {
@@ -747,14 +1302,15 @@ fun SelavuModalSheetHost(
                                     name = name.trim(),
                                     iconKey = iconKey,
                                     colorIndex = colorIdx,
-                                    subcategories = subs
+                                    subcategories = subs,
+                                    hiddenFromWorkspace = hiddenFromWorkspace
                                 )
                                 onSaveCategory(cat)
                                 onDismiss()
                             }
                         },
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = colors.accent, contentColor = colors.onAccent),
+                        shape = MaterialTheme.shapes.medium,
+                        colors = ButtonDefaults.buttonColors(containerColor = colorScheme.primary, contentColor = colorScheme.onPrimary),
                         modifier = Modifier.fillMaxWidth().height(48.dp)
                     ) { Text("Save category") }
 
@@ -771,8 +1327,8 @@ fun SelavuModalSheetHost(
                                     onDismiss()
                                 }
                             },
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.bad),
+                            shape = MaterialTheme.shapes.small,
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.error),
                             modifier = Modifier.fillMaxWidth().height(46.dp)
                         ) {
                             Text(
@@ -789,29 +1345,86 @@ fun SelavuModalSheetHost(
                 is ActiveSheet.ExpenseDetail -> {
                     val exp = activeSheet.expense
                     val cat = categories.firstOrNull { it.id == exp.categoryId }
+                    val isRetainedLocked = (exp.vehicleId != null && exp.vehicleId in retainedVehicleIds) ||
+                        (exp.projectId != null && exp.projectId in retainedProjectIds)
+                    var isPrivateLocal by remember(exp.id) { mutableStateOf(exp.isPrivate) }
+                    var confirmDelete by remember(exp.id) { mutableStateOf(false) }
+
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         CategoryTile(iconKey = cat?.iconKey ?: "tag", colorIndex = cat?.colorIndex ?: 9, size = 46.dp)
                         Column(modifier = Modifier.weight(1f)) {
                             Text(exp.title, style = MaterialTheme.typography.headlineMedium)
-                            Text("${cat?.name ?: "Other"} · ${exp.subcategory}", style = MaterialTheme.typography.bodySmall, color = colors.ink2)
+                            Text("${cat?.name ?: "Other"} · ${exp.subcategory}", style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
                         }
+                    }
+                    if (isRetainedLocked) {
+                        StatusPill(
+                            text = "Past workspace contribution · Read-only (delete only)",
+                            status = ServiceStatus.DUE_SOON
+                        )
                     }
                     Text(
                         text = IndianFormatters.formatInr(exp.amount),
-                        style = MaterialTheme.typography.displayLarge.copy(fontSize = 32.sp),
-                        color = colors.ink
+                        style = MaterialTheme.typography.displayMedium,
+                        color = colorScheme.onSurface
                     )
                     Text(
                         text = "${IndianFormatters.formatDate(exp.dateEpochMs)} · Paid via ${exp.paymentMode}",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = colors.ink2
+                        color = colorScheme.onSurfaceVariant
                     )
+
+                    val linkedVehicle = exp.vehicleId?.let { vid -> vehicles.firstOrNull { it.id == vid } }
+                    val linkedProject = exp.projectId?.let { pid -> projects.firstOrNull { it.id == pid } }
+                    if (linkedVehicle != null || linkedProject != null || exp.odometerReading != null || exp.fuelPricePerLitre != null || exp.fuelLitres != null) {
+                        SelavuDivider()
+                        Text("Vehicle, Project & Fuel Details", style = MaterialTheme.typography.titleMedium)
+                        linkedVehicle?.let { DetailKv("Vehicle", "${it.name} (${it.plate})") }
+                        linkedProject?.let { DetailKv("Project", it.name) }
+                        exp.odometerReading?.let { DetailKv("Odometer reading", "${IndianFormatters.formatIndianInteger(it.toLong())} km") }
+                        exp.fuelPricePerLitre?.let { DetailKv("Per litre cost", "${IndianFormatters.formatInr(it, 2)} / L") }
+                        exp.fuelLitres?.let { DetailKv("Total litres bought", "${if (it % 1.0 == 0.0) it.toInt() else "%.2f".format(it)} L") }
+                    }
+
+                    if (inWorkspace && !isRetainedLocked) {
+                        SelavuDivider()
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text("Hide from Family Workspace", style = MaterialTheme.typography.labelLarge)
+                                Text(
+                                    text = if (cat?.hiddenFromWorkspace == true) {
+                                        "Category is already hidden from Family Workspace"
+                                    } else if (isPrivateLocal) {
+                                        "Private — excluded from shared Family Workspace"
+                                    } else {
+                                        "Shared with members of your Family Workspace"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = isPrivateLocal,
+                                onCheckedChange = {
+                                    val prev = isPrivateLocal
+                                    isPrivateLocal = !prev
+                                    onToggleExpensePrivacy(exp.copy(isPrivate = prev))
+                                },
+                                colors = SwitchDefaults.colors(checkedTrackColor = colorScheme.primary),
+                                modifier = Modifier.testTag("expense_detail_private_switch")
+                            )
+                        }
+                    }
 
                     if (!exp.gstin.isNullOrBlank() || !exp.billNumber.isNullOrBlank() || (exp.cgst ?: 0.0) > 0.0 || (exp.igst ?: 0.0) > 0.0) {
                         SelavuDivider()
                         Text("GST & Invoice Details", style = MaterialTheme.typography.titleMedium)
-                        if (!exp.billNumber.isNullOrBlank()) Text("Bill No: ${exp.billNumber}", style = MaterialTheme.typography.bodySmall, color = colors.ink2)
-                        if (!exp.gstin.isNullOrBlank()) Text("GSTIN: ${exp.gstin}", style = MaterialTheme.typography.bodySmall, color = colors.ink2)
+                        if (!exp.billNumber.isNullOrBlank()) Text("Bill No: ${exp.billNumber}", style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
+                        if (!exp.gstin.isNullOrBlank()) Text("GSTIN: ${exp.gstin}", style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
                         exp.taxableValue?.let { DetailKv("Taxable value", IndianFormatters.formatInr(it, 2)) }
                         exp.cgst?.takeIf { it > 0 }?.let { DetailKv("CGST", IndianFormatters.formatInr(it, 2)) }
                         exp.sgst?.takeIf { it > 0 }?.let { DetailKv("SGST", IndianFormatters.formatInr(it, 2)) }
@@ -835,20 +1448,117 @@ fun SelavuModalSheetHost(
                                         style = MaterialTheme.typography.bodyMedium.copy(
                                             fontWeight = if (isSub) FontWeight.Normal else FontWeight.SemiBold
                                         ),
-                                        color = if (isSub) colors.ink2 else colors.ink
+                                        color = if (isSub) colorScheme.onSurfaceVariant else colorScheme.onSurface
                                     )
                                     val hsn = if (line.hsn.isNotBlank()) " · HSN ${line.hsn}" else ""
                                     Text(
                                         text = "${line.qty} ${line.unit} @ ${IndianFormatters.formatInr(line.rate)}$hsn",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = colors.ink3
+                                        color = colorScheme.outline
                                     )
                                 }
                                 Text(
                                     text = IndianFormatters.formatInr(line.amount, 2),
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                                    style = SelavuTheme.textStyles.numericCaption,
+                                    color = colorScheme.onSurface
                                 )
                             }
+                        }
+                    }
+
+                    SelavuDivider()
+                    if (!isRetainedLocked) {
+                        Button(
+                            onClick = { onEditExpense(exp) },
+                            shape = MaterialTheme.shapes.small,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = colorScheme.primary,
+                                contentColor = colorScheme.onPrimary
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("expense_detail_edit_button")
+                        ) {
+                            Icon(Icons.Filled.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Edit expense")
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            if (!confirmDelete) {
+                                confirmDelete = true
+                            } else {
+                                onDeleteExpense(exp.id)
+                                onDismiss()
+                            }
+                        },
+                        shape = MaterialTheme.shapes.small,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.error),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("expense_detail_delete_button")
+                    ) {
+                        Icon(Icons.Filled.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (confirmDelete) "Tap again to delete expense" else "Delete expense")
+                    }
+                }
+
+                is ActiveSheet.SharedExpenseDetail -> {
+                    val shared = activeSheet.sharedExpense
+                    var confirmDelete by remember(shared.id) { mutableStateOf(false) }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        CategoryTile(iconKey = shared.categoryIconKey, colorIndex = shared.categoryColorIndex, size = 46.dp)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(shared.title, style = MaterialTheme.typography.headlineMedium)
+                            Text("${shared.categoryName} · ${shared.subcategory}", style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    if (shared.retainedForDeparture) {
+                        StatusPill(
+                            text = "Past workspace contribution · Read-only (delete only)",
+                            status = ServiceStatus.DUE_SOON
+                        )
+                    }
+                    Text(
+                        text = IndianFormatters.formatInr(shared.amount),
+                        style = MaterialTheme.typography.displayMedium,
+                        color = colorScheme.onSurface
+                    )
+                    DetailKv("Shared by", shared.ownerName)
+                    DetailKv("Date", IndianFormatters.formatDate(shared.dateEpochMs))
+                    DetailKv("Payment mode", shared.paymentMode)
+                    if (shared.odometerReading != null || shared.fuelPricePerLitre != null || shared.fuelLitres != null) {
+                        SelavuDivider()
+                        Text("Fuel & Odometer Details", style = MaterialTheme.typography.titleMedium)
+                        shared.odometerReading?.let { DetailKv("Odometer", "${IndianFormatters.formatIndianInteger(it.toLong())} km") }
+                        shared.fuelPricePerLitre?.let { DetailKv("Per litre cost", "${IndianFormatters.formatInr(it, 2)} / L") }
+                        shared.fuelLitres?.let { DetailKv("Litres bought", "${if (it % 1.0 == 0.0) it.toInt() else "%.2f".format(it)} L") }
+                    }
+                    if (shared.retainedForDeparture && shared.ownerUid == currentUid) {
+                        SelavuDivider()
+                        OutlinedButton(
+                            onClick = {
+                                if (!confirmDelete) {
+                                    confirmDelete = true
+                                } else {
+                                    onDeleteRetainedExpense(shared)
+                                    onDismiss()
+                                }
+                            },
+                            shape = MaterialTheme.shapes.small,
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.error),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("shared_expense_detail_delete_button")
+                        ) {
+                            Icon(Icons.Filled.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (confirmDelete) "Tap again to delete contribution" else "Delete contribution")
                         }
                     }
                 }
@@ -860,12 +1570,12 @@ fun SelavuModalSheetHost(
                         CategoryTile(iconKey = cat.iconKey, colorIndex = cat.colorIndex)
                         Column {
                             Text(cat.name, style = MaterialTheme.typography.headlineMedium)
-                            Text("${list.size} entries · ${IndianFormatters.formatInr(list.sumOf { it.amount })}", style = MaterialTheme.typography.bodySmall, color = colors.ink2)
+                            Text("${list.size} entries · ${IndianFormatters.formatInr(list.sumOf { it.amount })}", style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
                         }
                     }
                     SelavuDivider()
                     if (list.isEmpty()) {
-                        Text("No expenses recorded in this category yet.", style = MaterialTheme.typography.bodyMedium, color = colors.ink2)
+                        Text("No expenses recorded in this category yet.", style = MaterialTheme.typography.bodyMedium, color = colorScheme.onSurfaceVariant)
                     } else {
                         list.take(12).forEach { exp ->
                             Row(
@@ -874,9 +1584,9 @@ fun SelavuModalSheetHost(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(exp.title, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold))
-                                    Text("${exp.subcategory} · ${IndianFormatters.formatDate(exp.dateEpochMs)}", style = MaterialTheme.typography.bodySmall, color = colors.ink2)
+                                    Text("${exp.subcategory} · ${IndianFormatters.formatDate(exp.dateEpochMs)}", style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
                                 }
-                                Text(IndianFormatters.formatInr(exp.amount), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold))
+                                Text(IndianFormatters.formatInr(exp.amount), style = SelavuTheme.textStyles.numericBody)
                             }
                         }
                     }
@@ -893,36 +1603,46 @@ fun SelavuModalSheetHost(
                     var mappedSvcId by remember { mutableStateOf(item.mappedServiceItemId) }
 
                     Text("Edit scanned item", style = MaterialTheme.typography.headlineMedium)
-                    OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Description") }, modifier = Modifier.fillMaxWidth())
+                    SelavuTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = "Description",
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
+                        SelavuTextField(
                             value = qty,
                             onValueChange = { qty = it },
-                            label = { Text("Qty") },
+                            label = "Qty",
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             modifier = Modifier.weight(1f)
                         )
-                        OutlinedTextField(
+                        SelavuTextField(
                             value = rate,
                             onValueChange = { rate = it },
-                            label = { Text("Rate ₹") },
+                            label = "Rate ₹",
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             modifier = Modifier.weight(1f)
                         )
-                        OutlinedTextField(
+                        SelavuTextField(
                             value = discount,
                             onValueChange = { discount = it },
-                            label = { Text("Disc ₹") },
+                            label = "Disc ₹",
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             modifier = Modifier.weight(1f)
                         )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(value = hsn, onValueChange = { hsn = it }, label = { Text("HSN / SAC") }, modifier = Modifier.weight(1f))
-                        OutlinedTextField(
+                        SelavuTextField(
+                            value = hsn,
+                            onValueChange = { hsn = it },
+                            label = "HSN / SAC",
+                            modifier = Modifier.weight(1f)
+                        )
+                        SelavuTextField(
                             value = gst,
                             onValueChange = { if (it.all(Char::isDigit)) gst = it },
-                            label = { Text("GST %") },
+                            label = "GST %",
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             modifier = Modifier.weight(1f)
                         )
@@ -953,8 +1673,8 @@ fun SelavuModalSheetHost(
                             )
                             onDismiss()
                         },
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = colors.accent, contentColor = colors.onAccent),
+                        shape = MaterialTheme.shapes.medium,
+                        colors = ButtonDefaults.buttonColors(containerColor = colorScheme.primary, contentColor = colorScheme.onPrimary),
                         modifier = Modifier.fillMaxWidth().height(48.dp)
                     ) { Text("Update line & recompute GST") }
                 }
@@ -962,12 +1682,11 @@ fun SelavuModalSheetHost(
                 is ActiveSheet.EditMonthlyBudget -> {
                     var budgetText by remember { mutableStateOf(activeSheet.currentBudget.toInt().toString()) }
                     Text(strings.budgetLabel, style = MaterialTheme.typography.headlineMedium)
-                    OutlinedTextField(
+                    SelavuTextField(
                         value = budgetText,
                         onValueChange = { if (it.all(Char::isDigit)) budgetText = it },
-                        label = { Text("Monthly target (₹)") },
+                        label = "Monthly target (₹)",
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
                     Button(
@@ -980,8 +1699,8 @@ fun SelavuModalSheetHost(
                                 onDismiss()
                             }
                         },
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = colors.accent, contentColor = colors.onAccent),
+                        shape = MaterialTheme.shapes.medium,
+                        colors = ButtonDefaults.buttonColors(containerColor = colorScheme.primary, contentColor = colorScheme.onPrimary),
                         modifier = Modifier.fillMaxWidth().height(48.dp)
                     ) { Text("Save budget") }
                 }
@@ -992,27 +1711,27 @@ fun SelavuModalSheetHost(
 
 @Composable
 private fun SheetActionRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     title: String,
     subtitle: String,
     badge: String? = null,
     onClick: () -> Unit
 ) {
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(colors.sunk)
+            .clip(MaterialTheme.shapes.medium)
+            .background(colorScheme.surfaceVariant)
             .clickable(onClick = onClick)
             .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Icon(icon, contentDescription = null, tint = colors.accentInk, modifier = Modifier.size(22.dp))
+        Icon(icon, contentDescription = null, tint = colorScheme.onPrimaryContainer, modifier = Modifier.size(22.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = colors.ink)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = colors.ink2)
+            Text(title, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = colorScheme.onSurface)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
         }
         if (badge != null) {
             StatusPill(badge, isAccent = true)
@@ -1022,9 +1741,9 @@ private fun SheetActionRow(
 
 @Composable
 private fun DetailKv(label: String, value: String) {
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, style = MaterialTheme.typography.bodySmall, color = colors.ink2)
-        Text(value, style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), color = colors.ink)
+        Text(label, style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
+        Text(value, style = SelavuTheme.textStyles.numericCaption, color = colorScheme.onSurface)
     }
 }

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>App Policies &amp; Feature Governance — RecapSpends</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/">
+        <span class="brand-mark">₹</span>
+        <span>RecapSpends</span>
+      </a>
+      <nav class="nav" aria-label="Legal navigation">
+        <a href="/">Overview</a>
+        <a href="/terms">Terms</a>
+        <a class="active" href="/policies">Policies</a>
+        <a href="/privacy">Privacy Notice</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <span class="badge">Platform &amp; Feature Policies</span>
+      <h1>App Policies &amp; Data Safety Disclosures</h1>
+      <p class="subtitle">
+        Specific operational commitments covering Android permissions, notification parsing rules,
+        OTP protection, Family Workspace boundaries, and account deletion.
+      </p>
+      <div class="meta-row">
+        <span><strong>Effective Date:</strong> November 13, 2026</span>
+        <span><strong>Google Play Compliance:</strong> Least-Privilege &amp; Prominent Disclosure</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>1. Notification Auto-Tracking Policy (No SMS Permissions)</h2>
+      <div class="callout">
+        <strong>Zero SMS Inbox Access:</strong> RecapSpends does <strong>not</strong> declare or request
+        <code>READ_SMS</code>, <code>RECEIVE_SMS</code>, or call/contacts permissions. Your SMS inbox is never read.
+      </div>
+      <ul>
+        <li><strong>Opt-In Prominent Disclosure:</strong> Before turning on expense alert auto-detection, RecapSpends presents an explicit in-app disclosure explaining what is read and what is ignored.</li>
+        <li><strong>New Notifications Only:</strong> Android’s <code>NotificationListenerService</code> processes only newly posted notifications while the user is signed in and the feature is turned on. Past or existing notifications are never scanned.</li>
+        <li><strong>Strict In-Memory OTP &amp; Security Filtering:</strong> Any notification containing OTPs, one-time passwords, verification/auth/login/security codes, MPIN, CVV, "do not share", credits, refunds, failed transactions, or balance-only alerts is rejected immediately in memory—never saved locally, logged, or sent to any server.</li>
+        <li><strong>Local Review Queue Until Approved:</strong> Qualifying payment/debit alerts are stored locally on the device in DataStore scoped to the active user ID. Signing out pauses new captures without erasing existing unapproved drafts. Drafts sync to Firestore only after you review and tap <strong>Approve</strong>.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>2. Camera, Media &amp; AI Processing Policy</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Capability</th>
+            <th>Android Permission / Picker Used</th>
+            <th>Purpose &amp; Limitation</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Bill Camera Capture</td>
+            <td><code>CAMERA</code> (requested at runtime only when tapping Camera)</td>
+            <td>Captures receipt photos solely when initiated by you for AI extraction.</td>
+          </tr>
+          <tr>
+            <td>Gallery Receipt Selection</td>
+            <td>Android Photo Picker (Zero storage permissions)</td>
+            <td>Grants one-time access only to the single receipt image you pick; never browses your full library.</td>
+          </tr>
+          <tr>
+            <td>PDF Invoice Selection</td>
+            <td>Android Storage Access Framework Document Picker</td>
+            <td>Reads only the single PDF document you choose for bill item/GST parsing.</td>
+          </tr>
+          <tr>
+            <td>Network &amp; Security</td>
+            <td><code>INTERNET</code> + Firebase App Check</td>
+            <td>Syncs authenticated user records, workspace shares, and Firebase AI Logic calls securely.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>3. Family Workspace Sharing &amp; Removal Policy</h2>
+      <ul>
+        <li><strong>Single Shared Workspace:</strong> Each account may belong to at most one Family Workspace at a time via invite code.</li>
+        <li><strong>Granular Privacy Controls:</strong> Expenses flagged as <em>Hide from Family Workspace</em> and expenses assigned to categories marked <em>Hidden from Family Workspace</em> are strictly excluded from workspace sharing.</li>
+        <li><strong>Complete Sharing Cutoff on Exit or Removal:</strong> Workspace creators may remove any member, and any member may leave at any time. Removing a member or leaving immediately revokes workspace membership and deletes every shared expense copy authored by that member from the workspace, leaving their personal expense history intact.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>4. Acceptable Use Policy</h2>
+      <p>Users agree not to:</p>
+      <ul>
+        <li>Attempt to bypass Firebase App Check, Firestore security rules, or workspace invite controls.</li>
+        <li>Upload unlawful, fraudulent, or malicious payloads via the AI Bill Scanner or custom text fields.</li>
+        <li>Share invite codes publicly or add members to a Family Workspace without their consent.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>5. Fresh Start &amp; Account Deletion Policy</h2>
+      <ul>
+        <li><strong>Start Fresh (Delete All Data):</strong> Wipes your personal expenses, vehicles, service logs, bill reminders, projects, and categories while removing your shared workspace copies. Your authentication login stays active so you can rebuild cleanly.</li>
+        <li><strong>Permanent Account Deletion:</strong> Permanently erases all Firestore personal records, removes workspace memberships/shared copies, wipes your device-local Review drafts, and deletes your Firebase Authentication account.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>© 2026 RecapSpends</span>
+    <span>
+      <a href="/">Overview</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy Notice</a>
+    </span>
+  </footer>
+</body>
+</html>

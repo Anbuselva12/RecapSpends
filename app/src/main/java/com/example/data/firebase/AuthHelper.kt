@@ -9,16 +9,24 @@ import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import com.example.R
-import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.example.data.notifications.ReviewDraftStore
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseNetworkException
+import com.google.firebase.FirebaseTooManyRequestsException
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthException
+import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
+import com.google.firebase.auth.FirebaseAuthInvalidUserException
 import com.google.firebase.auth.FirebaseAuthRecentLoginRequiredException
+import com.google.firebase.auth.FirebaseAuthUserCollisionException
+import com.google.firebase.auth.FirebaseAuthWeakPasswordException
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
 import com.google.firebase.auth.userProfileChangeRequest
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.awaitClose
@@ -30,51 +38,52 @@ import kotlinx.coroutines.withContext
 
 private const val AUTH_TAG = "SelavuAuth"
 
+class EmailAlreadyInUseException(
+    message: String = "An account with this email already exists. Sign in with your password, reset your password, or continue with Google."
+) : Exception(message)
+
+internal fun mapFirebaseAuthException(error: Throwable): Throwable {
+    if (error is CancellationException) throw error
+    return when (error) {
+        is FirebaseAuthUserCollisionException -> EmailAlreadyInUseException()
+        is FirebaseAuthWeakPasswordException -> IllegalArgumentException(
+            "Password is too weak. Use at least 6 characters."
+        )
+        is FirebaseAuthInvalidUserException -> IllegalArgumentException(
+            "No account found for this email. Switch to Create account or continue with Google."
+        )
+        is FirebaseAuthInvalidCredentialsException -> {
+            if (error.errorCode == "ERROR_INVALID_EMAIL") {
+                IllegalArgumentException("Please enter a valid email address.")
+            } else {
+                IllegalArgumentException("Incorrect email or password. Please check and try again.")
+            }
+        }
+        is FirebaseTooManyRequestsException -> IllegalStateException(
+            "Too many attempts right now. Please wait a moment or reset your password."
+        )
+        is FirebaseNetworkException -> IllegalStateException(
+            "Network error. Check your internet connection and try again."
+        )
+        is FirebaseAuthException -> {
+            if (error.errorCode == "ERROR_EMAIL_ALREADY_IN_USE") {
+                EmailAlreadyInUseException()
+            } else {
+                IllegalStateException(
+                    error.localizedMessage ?: "Authentication failed. Please try again."
+                )
+            }
+        }
+        else -> error
+    }
+}
+
 internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
     val listener = FirebaseAuth.AuthStateListener { auth ->
         trySend(auth.currentUser)
     }
     addAuthStateListener(listener)
     awaitClose { removeAuthStateListener(listener) }
-}
-
-suspend fun attemptAutoSignIn(
-    context: Context,
-    credentialManager: CredentialManager
-): Boolean {
-    if (Firebase.auth.currentUser != null) return true
-    val clientId = try {
-        context.getString(R.string.default_web_client_id)
-    } catch (_: Exception) {
-        return false
-    }
-
-    val googleIdOption = GetGoogleIdOption.Builder()
-        .setFilterByAuthorizedAccounts(true)
-        .setServerClientId(clientId)
-        .setAutoSelectEnabled(true)
-        .build()
-
-    val request = GetCredentialRequest.Builder()
-        .addCredentialOption(googleIdOption)
-        .build()
-
-    return try {
-        val result = credentialManager.getCredential(context, request)
-        val credential = result.credential
-        if (credential is CustomCredential &&
-            credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
-        ) {
-            val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
-            val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
-            Firebase.auth.signInWithCredential(authCredential).await()
-            true
-        } else {
-            false
-        }
-    } catch (_: Exception) {
-        false
-    }
 }
 
 fun launchInteractiveGoogleSignIn(
@@ -117,42 +126,64 @@ fun launchInteractiveGoogleSignIn(
             onAuthCancelled()
         } catch (e: Exception) {
             Log.e(AUTH_TAG, "Google Sign-In failed", e)
-            onAuthError(e.localizedMessage ?: "Sign in failed. Please try again.")
+            onAuthError(mapFirebaseAuthException(e).localizedMessage ?: "Sign in failed. Please try again.")
         }
     }
 }
 
-suspend fun signInWithEmailPassword(email: String, password: String): Result<Unit> = runCatching {
+suspend fun signInWithEmailPassword(email: String, password: String): Result<Unit> = try {
     val cleanEmail = email.trim()
-    require(cleanEmail.contains("@")) { "Please enter a valid email address." }
+    require(cleanEmail.contains("@") && cleanEmail.contains(".")) { "Please enter a valid email address." }
     require(password.isNotEmpty()) { "Please enter your password." }
     Firebase.auth.signInWithEmailAndPassword(cleanEmail, password).await()
+    Result.success(Unit)
+} catch (e: Throwable) {
+    val mapped = mapFirebaseAuthException(e)
+    Log.w(AUTH_TAG, "Email sign-in failed: ${mapped.message}")
+    Result.failure(mapped)
 }
 
 suspend fun createAccountWithEmailPassword(
     username: String,
     email: String,
     password: String
-): Result<Unit> = runCatching {
+): Result<Unit> = try {
     val cleanName = username.trim()
     val cleanEmail = email.trim()
     require(cleanName.isNotEmpty()) { "Please enter a username or display name." }
-    require(cleanEmail.contains("@")) { "Please enter a valid email address." }
+    require(cleanEmail.contains("@") && cleanEmail.contains(".")) { "Please enter a valid email address." }
     require(password.length >= 6) { "Password must be at least 6 characters." }
     val result = Firebase.auth.createUserWithEmailAndPassword(cleanEmail, password).await()
     val user = result.user
     if (user != null) {
-        val profileUpdates = userProfileChangeRequest {
-            displayName = cleanName.take(80)
+        try {
+            val profileUpdates = userProfileChangeRequest {
+                displayName = cleanName.take(80)
+            }
+            user.updateProfile(profileUpdates).await()
+        } catch (profileError: Exception) {
+            if (profileError is CancellationException) throw profileError
+            Log.w(AUTH_TAG, "Account created but updating display name failed: ${profileError.message}")
         }
-        user.updateProfile(profileUpdates).await()
     }
+    Result.success(Unit)
+} catch (e: Throwable) {
+    val mapped = mapFirebaseAuthException(e)
+    Log.w(AUTH_TAG, "Account creation failed: ${mapped.message}")
+    Result.failure(mapped)
 }
 
-suspend fun sendPasswordResetEmail(email: String): Result<Unit> = runCatching {
+suspend fun sendPasswordResetEmail(email: String): Result<Unit> = try {
     val cleanEmail = email.trim()
-    require(cleanEmail.contains("@")) { "Enter your registered email address to receive a reset link." }
+    require(cleanEmail.contains("@") && cleanEmail.contains(".")) {
+        "Enter your registered email address to receive a reset link."
+    }
     Firebase.auth.sendPasswordResetEmail(cleanEmail).await()
+    Result.success(Unit)
+} catch (e: Throwable) {
+    val mapped = mapFirebaseAuthException(e)
+    Log.w(AUTH_TAG, "Password reset failed: ${mapped.message}")
+    Result.failure(mapped)
 }
 
 suspend fun updateAuthDisplayName(newName: String): Result<Unit> = runCatching {
@@ -164,7 +195,8 @@ suspend fun updateAuthDisplayName(newName: String): Result<Unit> = runCatching {
 
 suspend fun deleteAccountCompletely(
     credentialManager: CredentialManager,
-    repository: SelavuRepository
+    repository: SelavuRepository,
+    draftStore: ReviewDraftStore? = null
 ): Result<Unit> {
     val user = Firebase.auth.currentUser
         ?: return Result.failure(IllegalStateException("User is not signed in."))
@@ -173,6 +205,12 @@ suspend fun deleteAccountCompletely(
         repository.deleteAllUserData(uid = uid, deleteProfileDoc = true)
         user.delete().await()
         withContext(NonCancellable) {
+            try {
+                draftStore?.clearUserDrafts(uid)
+                draftStore?.clearActiveUser()
+            } catch (e: Exception) {
+                Log.w(AUTH_TAG, "Failed to clear drafts after account delete: ${e.message}")
+            }
             try {
                 credentialManager.clearCredentialState(ClearCredentialStateRequest())
             } catch (e: Exception) {
@@ -197,10 +235,17 @@ suspend fun deleteAccountCompletely(
 fun signOutUser(
     credentialManager: CredentialManager,
     scope: CoroutineScope,
+    draftStore: ReviewDraftStore? = null,
     onComplete: () -> Unit = {}
 ) {
     scope.launch {
         withContext(NonCancellable) {
+            try {
+                // Only clears active_uid pointer; unapproved Review drafts stay preserved device-locally.
+                draftStore?.clearActiveUser()
+            } catch (e: Exception) {
+                Log.w(AUTH_TAG, "Failed to clear active user in draft store: ${e.message}")
+            }
             try {
                 credentialManager.clearCredentialState(ClearCredentialStateRequest())
             } catch (e: Exception) {

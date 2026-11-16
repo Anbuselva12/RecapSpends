@@ -1,16 +1,23 @@
 package com.example.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
@@ -18,11 +25,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.CurrencyRupee
 import androidx.compose.material.icons.filled.Email
@@ -39,12 +46,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,26 +58,38 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
-import com.example.data.firebase.attemptAutoSignIn
+import com.example.R
+import com.example.data.firebase.EmailAlreadyInUseException
 import com.example.data.firebase.createAccountWithEmailPassword
 import com.example.data.firebase.launchInteractiveGoogleSignIn
 import com.example.data.firebase.sendPasswordResetEmail
 import com.example.data.firebase.signInWithEmailPassword
 import com.example.ui.components.SelavuSegmentedControl
+import com.example.ui.components.SelavuTextField
 import com.example.ui.theme.SelavuTheme
 import com.example.util.selavuStrings
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AuthScreen(
     onAuthSuccess: () -> Unit
@@ -82,8 +98,23 @@ fun AuthScreen(
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
+    val extendedColors = SelavuTheme.extendedColors
     val strings = selavuStrings()
+
+    val hostingBaseUrl = stringResource(R.string.hosting_base_url)
+    val termsUrl = stringResource(R.string.terms_url)
+    val policiesUrl = stringResource(R.string.policies_url)
+    val privacyUrl = stringResource(R.string.privacy_url)
+
+    fun openExternalUrl(url: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            context.startActivity(intent)
+        } catch (_: Exception) {
+            Toast.makeText(context, "Visit $url in your browser", Toast.LENGTH_LONG).show()
+        }
+    }
 
     var authMode by rememberSaveable { mutableStateOf("signin") }
     var username by rememberSaveable { mutableStateOf("") }
@@ -92,41 +123,44 @@ fun AuthScreen(
     var passwordVisible by rememberSaveable { mutableStateOf(false) }
 
     var isLoading by remember { mutableStateOf(false) }
-    var isCheckingSilent by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isEmailCollisionError by remember { mutableStateOf(false) }
     var infoMessage by remember { mutableStateOf<String?>(null) }
 
     var showForgotDialog by remember { mutableStateOf(false) }
     var resetEmailInput by rememberSaveable { mutableStateOf("") }
     var isSendingReset by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        val ok = attemptAutoSignIn(context, credentialManager)
-        isCheckingSilent = false
-        if (ok) onAuthSuccess()
-    }
-
     if (showForgotDialog) {
         AlertDialog(
             onDismissRequest = { if (!isSendingReset) showForgotDialog = false },
-            title = { Text("Reset password") },
+            containerColor = colorScheme.surface,
+            titleContentColor = colorScheme.onSurface,
+            textContentColor = colorScheme.onSurfaceVariant,
+            shape = MaterialTheme.shapes.extraLarge,
+            title = {
+                Text(
+                    text = "Reset password",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = colorScheme.onSurface
+                )
+            },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        text = "Enter your registered email address and Firebase will send a password reset link.",
+                        text = "Enter your registered email address and we will send a password reset link.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = colors.ink2
+                        color = colorScheme.onSurfaceVariant
                     )
-                    OutlinedTextField(
+                    SelavuTextField(
                         value = resetEmailInput,
                         onValueChange = { resetEmailInput = it },
-                        label = { Text("Email address") },
-                        singleLine = true,
+                        label = "Email address",
+                        placeholder = "name@example.com",
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Email,
                             imeAction = ImeAction.Done
                         ),
-                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("forgot_password_email_input")
@@ -136,9 +170,15 @@ fun AuthScreen(
             confirmButton = {
                 Button(
                     enabled = !isSendingReset,
+                    shape = MaterialTheme.shapes.small,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colorScheme.primary,
+                        contentColor = colorScheme.onPrimary
+                    ),
                     onClick = {
                         isSendingReset = true
                         errorMessage = null
+                        isEmailCollisionError = false
                         infoMessage = null
                         scope.launch {
                             val res = sendPasswordResetEmail(resetEmailInput)
@@ -156,7 +196,10 @@ fun AuthScreen(
                     },
                     modifier = Modifier.testTag("send_reset_email_button")
                 ) {
-                    Text(if (isSendingReset) "Sending…" else "Send reset link")
+                    Text(
+                        text = if (isSendingReset) "Sending…" else "Send reset link",
+                        style = MaterialTheme.typography.labelLarge
+                    )
                 }
             },
             dismissButton = {
@@ -164,22 +207,21 @@ fun AuthScreen(
                     enabled = !isSendingReset,
                     onClick = { showForgotDialog = false }
                 ) {
-                    Text("Cancel")
+                    Text(
+                        text = "Cancel",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = colorScheme.onSurfaceVariant
+                    )
                 }
             }
         )
     }
 
-    val fieldColors = OutlinedTextFieldDefaults.colors(
-        focusedContainerColor = colors.bg,
-        unfocusedContainerColor = colors.bg,
-        focusedBorderColor = colors.accent,
-        unfocusedBorderColor = colors.line
-    )
-
     fun submitEmailAuth() {
+        if (isLoading) return
         focusManager.clearFocus()
         errorMessage = null
+        isEmailCollisionError = false
         infoMessage = null
         isLoading = true
         scope.launch {
@@ -192,7 +234,9 @@ fun AuthScreen(
             if (result.isSuccess) {
                 onAuthSuccess()
             } else {
-                errorMessage = result.exceptionOrNull()?.localizedMessage
+                val error = result.exceptionOrNull()
+                isEmailCollisionError = error is EmailAlreadyInUseException
+                errorMessage = error?.localizedMessage
                     ?: "Authentication failed. Please check your credentials."
             }
         }
@@ -201,7 +245,7 @@ fun AuthScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(colors.bg)
+            .background(colorScheme.background)
             .safeDrawingPadding()
             .imePadding(),
         contentAlignment = Alignment.Center
@@ -211,7 +255,7 @@ fun AuthScreen(
                 .fillMaxWidth()
                 .widthIn(max = 460.dp)
                 .verticalScroll(rememberScrollState())
-                .padding(24.dp),
+                .padding(horizontal = 24.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Row(
@@ -221,14 +265,18 @@ fun AuthScreen(
                 Box(
                     modifier = Modifier
                         .size(56.dp)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(colors.hero),
+                        .clip(MaterialTheme.shapes.large)
+                        .background(
+                            Brush.linearGradient(
+                                listOf(colorScheme.secondary, colorScheme.primary)
+                            )
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Filled.CurrencyRupee,
                         contentDescription = "RecapSpends",
-                        tint = colors.heroFg,
+                        tint = colorScheme.onSecondary,
                         modifier = Modifier.size(30.dp)
                     )
                 }
@@ -236,12 +284,12 @@ fun AuthScreen(
                     Text(
                         text = strings.appName,
                         style = MaterialTheme.typography.headlineLarge,
-                        color = colors.ink
+                        color = colorScheme.onBackground
                     )
                     Text(
                         text = "Track Expense Smartly",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = colors.accentInk
+                        style = MaterialTheme.typography.titleMedium,
+                        color = colorScheme.onPrimaryContainer
                     )
                 }
             }
@@ -249,15 +297,15 @@ fun AuthScreen(
             Text(
                 text = strings.signInSubtitle,
                 style = MaterialTheme.typography.bodyMedium,
-                color = colors.ink2
+                color = colorScheme.onSurfaceVariant
             )
 
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(colors.surface)
-                    .border(1.dp, colors.line, RoundedCornerShape(22.dp))
+                    .clip(MaterialTheme.shapes.extraLarge)
+                    .background(colorScheme.surface)
+                    .border(1.dp, colorScheme.outlineVariant, MaterialTheme.shapes.extraLarge)
                     .padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -267,68 +315,82 @@ fun AuthScreen(
                     onSelect = { mode ->
                         authMode = mode
                         errorMessage = null
+                        isEmailCollisionError = false
                         infoMessage = null
                     },
                     modifier = Modifier.testTag("auth_mode_toggle")
                 )
 
                 if (authMode == "signup") {
-                    OutlinedTextField(
+                    SelavuTextField(
                         value = username,
                         onValueChange = { username = it },
-                        label = { Text("Username / Display name") },
-                        placeholder = { Text("e.g. Karthik Raja") },
-                        leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null) },
-                        singleLine = true,
+                        label = "Username / Display name",
+                        placeholder = "e.g. Karthik Raja",
+                        leadingIcon = {
+                            Icon(
+                                Icons.Filled.Person,
+                                contentDescription = null,
+                                tint = colorScheme.onSurfaceVariant
+                            )
+                        },
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = fieldColors,
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("auth_username_input")
                     )
                 }
 
-                OutlinedTextField(
+                SelavuTextField(
                     value = email,
-                    onValueChange = { email = it },
-                    label = { Text("Email address") },
-                    placeholder = { Text("name@example.com") },
-                    leadingIcon = { Icon(Icons.Filled.Email, contentDescription = null) },
-                    singleLine = true,
+                    onValueChange = {
+                        email = it
+                        isEmailCollisionError = false
+                    },
+                    label = "Email address",
+                    placeholder = "name@example.com",
+                    leadingIcon = {
+                        Icon(
+                            Icons.Filled.Email,
+                            contentDescription = null,
+                            tint = colorScheme.onSurfaceVariant
+                        )
+                    },
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Email,
                         imeAction = ImeAction.Next
                     ),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = fieldColors,
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("auth_email_input")
                 )
 
-                OutlinedTextField(
+                SelavuTextField(
                     value = password,
                     onValueChange = { password = it },
-                    label = { Text(if (authMode == "signup") "Password (min 6 chars)" else "Password") },
-                    leadingIcon = { Icon(Icons.Filled.Lock, contentDescription = null) },
+                    label = if (authMode == "signup") "Password (min 6 chars)" else "Password",
+                    leadingIcon = {
+                        Icon(
+                            Icons.Filled.Lock,
+                            contentDescription = null,
+                            tint = colorScheme.onSurfaceVariant
+                        )
+                    },
                     trailingIcon = {
                         IconButton(onClick = { passwordVisible = !passwordVisible }) {
                             Icon(
                                 imageVector = if (passwordVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                                contentDescription = if (passwordVisible) "Hide password" else "Show password"
+                                contentDescription = if (passwordVisible) "Hide password" else "Show password",
+                                tint = colorScheme.onSurfaceVariant
                             )
                         }
                     },
                     visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                    singleLine = true,
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Password,
                         imeAction = ImeAction.Done
                     ),
                     keyboardActions = KeyboardActions(onDone = { submitEmailAuth() }),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = fieldColors,
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("auth_password_input")
@@ -342,9 +404,9 @@ fun AuthScreen(
                         Text(
                             text = "Forgot password?",
                             style = MaterialTheme.typography.labelLarge,
-                            color = colors.accentInk,
+                            color = colorScheme.onPrimaryContainer,
                             modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
+                                .clip(MaterialTheme.shapes.extraSmall)
                                 .clickable {
                                     resetEmailInput = email.trim()
                                     showForgotDialog = true
@@ -359,41 +421,85 @@ fun AuthScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(colors.okSoft)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(extendedColors.okSoft)
                             .padding(12.dp)
                     ) {
                         Text(
                             text = infoMessage!!,
                             style = MaterialTheme.typography.bodySmall,
-                            color = colors.ok
+                            color = extendedColors.ok
                         )
                     }
                 }
 
                 if (errorMessage != null) {
-                    Box(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(colors.badSoft)
-                            .padding(12.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(colorScheme.errorContainer)
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
                             text = errorMessage!!,
                             style = MaterialTheme.typography.bodySmall,
-                            color = colors.bad
+                            color = colorScheme.error
                         )
+                        if (isEmailCollisionError) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        authMode = "signin"
+                                        errorMessage = null
+                                        isEmailCollisionError = false
+                                    },
+                                    shape = MaterialTheme.shapes.small,
+                                    border = BorderStroke(1.dp, colorScheme.error.copy(alpha = 0.5f)),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = colorScheme.error
+                                    ),
+                                    modifier = Modifier.testTag("auth_switch_to_signin_from_error")
+                                ) {
+                                    Text(
+                                        text = "Switch to Sign in",
+                                        style = MaterialTheme.typography.labelLarge
+                                    )
+                                }
+                                TextButton(
+                                    onClick = {
+                                        resetEmailInput = email.trim()
+                                        errorMessage = null
+                                        isEmailCollisionError = false
+                                        showForgotDialog = true
+                                    },
+                                    colors = ButtonDefaults.textButtonColors(
+                                        contentColor = colorScheme.onErrorContainer
+                                    ),
+                                    modifier = Modifier.testTag("auth_reset_from_collision")
+                                ) {
+                                    Text(
+                                        text = "Reset password",
+                                        style = MaterialTheme.typography.labelLarge
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
                 Button(
                     onClick = { submitEmailAuth() },
                     enabled = !isLoading,
-                    shape = RoundedCornerShape(14.dp),
+                    shape = MaterialTheme.shapes.medium,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = colors.accent,
-                        contentColor = colors.onAccent
+                        containerColor = colorScheme.primary,
+                        contentColor = colorScheme.onPrimary
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -403,13 +509,13 @@ fun AuthScreen(
                     if (isLoading) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(20.dp),
-                            color = colors.onAccent,
+                            color = colorScheme.onPrimary,
                             strokeWidth = 2.dp
                         )
                     } else {
                         Text(
                             text = if (authMode == "signin") "Sign in" else "Create account",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold)
+                            style = MaterialTheme.typography.titleMedium
                         )
                     }
                 }
@@ -421,14 +527,16 @@ fun AuthScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    HorizontalDivider(modifier = Modifier.weight(1f), color = colors.line)
-                    Text("OR", style = MaterialTheme.typography.labelSmall, color = colors.ink3)
-                    HorizontalDivider(modifier = Modifier.weight(1f), color = colors.line)
+                    HorizontalDivider(modifier = Modifier.weight(1f), color = colorScheme.outlineVariant)
+                    Text("OR", style = MaterialTheme.typography.labelSmall, color = colorScheme.outline)
+                    HorizontalDivider(modifier = Modifier.weight(1f), color = colorScheme.outlineVariant)
                 }
 
                 OutlinedButton(
                     onClick = {
+                        if (isLoading) return@OutlinedButton
                         errorMessage = null
+                        isEmailCollisionError = false
                         infoMessage = null
                         isLoading = true
                         launchInteractiveGoogleSignIn(
@@ -448,37 +556,87 @@ fun AuthScreen(
                             }
                         )
                     },
-                    enabled = !isLoading && !isCheckingSilent,
-                    shape = RoundedCornerShape(14.dp),
+                    enabled = !isLoading,
+                    shape = MaterialTheme.shapes.medium,
+                    border = BorderStroke(1.dp, colorScheme.outlineVariant),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = colorScheme.background,
+                        contentColor = colorScheme.onSurface
+                    ),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(50.dp)
                         .testTag("google_sign_in_button")
                 ) {
-                    if (isCheckingSilent) {
-                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    } else {
-                        Icon(
-                            imageVector = Icons.Filled.AccountCircle,
-                            contentDescription = null,
-                            tint = colors.ink,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Continue with Google",
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                            color = colors.ink
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Filled.AccountCircle,
+                        contentDescription = null,
+                        tint = colorScheme.onSurface,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Continue with Google",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = colorScheme.onSurface
+                    )
                 }
             }
 
-            Text(
-                text = "Your financial data is private and isolated to your account.",
-                style = MaterialTheme.typography.bodySmall,
-                color = colors.ink3
+            val linkStyles = TextLinkStyles(
+                style = SpanStyle(
+                    color = colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
+                    textDecoration = TextDecoration.Underline
+                )
             )
+            val agreementText = buildAnnotatedString {
+                append("By signing in you agree to ")
+                withLink(
+                    LinkAnnotation.Url(
+                        url = termsUrl,
+                        styles = linkStyles,
+                        linkInteractionListener = { openExternalUrl(termsUrl) }
+                    )
+                ) {
+                    append("Terms")
+                }
+                append(" and ")
+                withLink(
+                    LinkAnnotation.Url(
+                        url = policiesUrl,
+                        styles = linkStyles,
+                        linkInteractionListener = { openExternalUrl(policiesUrl) }
+                    )
+                ) {
+                    append("Policies")
+                }
+                append(" & ")
+                withLink(
+                    LinkAnnotation.Url(
+                        url = privacyUrl,
+                        styles = linkStyles,
+                        linkInteractionListener = { openExternalUrl(privacyUrl) }
+                    )
+                ) {
+                    append("Privacy Notice")
+                }
+                append(".")
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = agreementText,
+                    style = MaterialTheme.typography.bodySmall.copy(textAlign = TextAlign.Center),
+                    color = colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("auth_legal_agreement_text")
+                )
+            }
         }
     }
 }

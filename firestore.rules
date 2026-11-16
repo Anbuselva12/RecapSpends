@@ -30,12 +30,30 @@ service cloud.firestore {
       return ts is timestamp && ts <= request.time;
     }
 
+    function wsExists(workspaceId) {
+      return exists(/databases/$(database)/documents/workspaces/$(workspaceId));
+    }
+
+    function wsData(workspaceId) {
+      return get(/databases/$(database)/documents/workspaces/$(workspaceId)).data;
+    }
+
+    function isWsMember(workspaceId) {
+      return wsExists(workspaceId) && (request.auth.uid in wsData(workspaceId).memberIds);
+    }
+
+    function isWsOwner(workspaceId) {
+      return wsExists(workspaceId) && wsData(workspaceId).ownerUid == request.auth.uid;
+    }
+
     function isValidUserProfile(data, userId) {
       return data.userId is string && data.userId == userId &&
              data.monthlyBudget is number && data.monthlyBudget > 0 && data.monthlyBudget <= 100000000 &&
              data.language is string && data.language in ['en', 'ta'] &&
              data.seeded is bool &&
-             (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 80));
+             (!('displayName' in data) || data.displayName == null || (data.displayName is string && data.displayName.size() <= 80)) &&
+             (!('workspaceId' in data) || data.workspaceId == null || isValidId(data.workspaceId)) &&
+             (!('contributedWorkspaceIds' in data) || data.contributedWorkspaceIds == null || (data.contributedWorkspaceIds is list && data.contributedWorkspaceIds.size() <= 20 && (data.contributedWorkspaceIds.size() == 0 || isValidId(data.contributedWorkspaceIds[0]))));
     }
 
     function isValidCategory(data, userId) {
@@ -45,7 +63,8 @@ service cloud.firestore {
              data.colorIndex is int && data.colorIndex >= 1 && data.colorIndex <= 9 &&
              data.subcategories is list && data.subcategories.size() <= 25 &&
              (data.subcategories.size() == 0 || data.subcategories[0] is string) &&
-             data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 500;
+             data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 500 &&
+             (!('hiddenFromWorkspace' in data) || data.hiddenFromWorkspace == null || data.hiddenFromWorkspace is bool);
     }
 
     function isValidExpense(data, userId) {
@@ -56,17 +75,21 @@ service cloud.firestore {
              data.categoryId is string && data.categoryId.size() >= 1 && data.categoryId.size() <= 128 &&
              data.subcategory is string && data.subcategory.size() <= 80 &&
              data.paymentMode is string && data.paymentMode in ['UPI', 'Cash', 'Card', 'Bank'] &&
-             (!('projectId' in data) || (data.projectId is string && data.projectId.size() <= 128)) &&
-             (!('vehicleId' in data) || (data.vehicleId is string && data.vehicleId.size() <= 128)) &&
-             (!('gstin' in data) || (data.gstin is string && data.gstin.size() <= 32)) &&
-             (!('billNumber' in data) || (data.billNumber is string && data.billNumber.size() <= 64)) &&
-             (!('taxableValue' in data) || (data.taxableValue is number && data.taxableValue >= 0)) &&
-             (!('cgst' in data) || (data.cgst is number && data.cgst >= 0)) &&
-             (!('sgst' in data) || (data.sgst is number && data.sgst >= 0)) &&
-             (!('igst' in data) || (data.igst is number && data.igst >= 0)) &&
-             (!('roundOff' in data) || (data.roundOff is number)) &&
-             (!('items' in data) || (data.items is list && data.items.size() <= 50 && (data.items.size() == 0 || data.items[0] is map))) &&
-             (!('attachmentNotes' in data) || (data.attachmentNotes is list && data.attachmentNotes.size() <= 10 && (data.attachmentNotes.size() == 0 || data.attachmentNotes[0] is string)));
+             (!('isPrivate' in data) || data.isPrivate == null || data.isPrivate is bool) &&
+             (!('projectId' in data) || data.projectId == null || (data.projectId is string && data.projectId.size() <= 128)) &&
+             (!('vehicleId' in data) || data.vehicleId == null || (data.vehicleId is string && data.vehicleId.size() <= 128)) &&
+             (!('gstin' in data) || data.gstin == null || (data.gstin is string && data.gstin.size() <= 32)) &&
+             (!('billNumber' in data) || data.billNumber == null || (data.billNumber is string && data.billNumber.size() <= 64)) &&
+             (!('taxableValue' in data) || data.taxableValue == null || (data.taxableValue is number && data.taxableValue >= 0)) &&
+             (!('cgst' in data) || data.cgst == null || (data.cgst is number && data.cgst >= 0)) &&
+             (!('sgst' in data) || data.sgst == null || (data.sgst is number && data.sgst >= 0)) &&
+             (!('igst' in data) || data.igst == null || (data.igst is number && data.igst >= 0)) &&
+             (!('roundOff' in data) || data.roundOff == null || (data.roundOff is number)) &&
+             (!('items' in data) || data.items == null || (data.items is list && data.items.size() <= 50 && (data.items.size() == 0 || data.items[0] is map))) &&
+             (!('attachmentNotes' in data) || data.attachmentNotes == null || (data.attachmentNotes is list && data.attachmentNotes.size() <= 10 && (data.attachmentNotes.size() == 0 || data.attachmentNotes[0] is string))) &&
+             (!('odometerReading' in data) || data.odometerReading == null || (data.odometerReading is int && data.odometerReading >= 0 && data.odometerReading <= 2000000)) &&
+             (!('fuelPricePerLitre' in data) || data.fuelPricePerLitre == null || (data.fuelPricePerLitre is number && data.fuelPricePerLitre >= 0 && data.fuelPricePerLitre <= 100000)) &&
+             (!('fuelLitres' in data) || data.fuelLitres == null || (data.fuelLitres is number && data.fuelLitres >= 0 && data.fuelLitres <= 100000));
     }
 
     function isValidVehicle(data, userId) {
@@ -78,7 +101,8 @@ service cloud.firestore {
              data.odometer is int && data.odometer >= 0 && data.odometer <= 2000000 &&
              data.avgMileage is number && data.avgMileage >= 0 && data.avgMileage <= 200 &&
              data.items is list && data.items.size() <= 40 && (data.items.size() == 0 || data.items[0] is map) &&
-             data.history is list && data.history.size() <= 100 && (data.history.size() == 0 || data.history[0] is map);
+             data.history is list && data.history.size() <= 100 && (data.history.size() == 0 || data.history[0] is map) &&
+             (!('hiddenFromWorkspace' in data) || data.hiddenFromWorkspace == null || data.hiddenFromWorkspace is bool);
     }
 
     function isValidBill(data, userId) {
@@ -93,7 +117,8 @@ service cloud.firestore {
              data.iconKey is string && data.iconKey.size() >= 1 && data.iconKey.size() <= 30 &&
              data.autopay is bool &&
              data.paid is bool &&
-             (!('paidOnEpochMs' in data) || (data.paidOnEpochMs is int && data.paidOnEpochMs > 0));
+             (!('paidOnEpochMs' in data) || data.paidOnEpochMs == null || (data.paidOnEpochMs is int && data.paidOnEpochMs > 0)) &&
+             (!('hiddenFromWorkspace' in data) || data.hiddenFromWorkspace == null || data.hiddenFromWorkspace is bool);
     }
 
     function isValidProject(data, userId) {
@@ -105,7 +130,147 @@ service cloud.firestore {
              data.budget is number && data.budget > 0 && data.budget <= 1000000000 &&
              data.phases is list && data.phases.size() <= 25 && (data.phases.size() == 0 || data.phases[0] is map) &&
              data.vendors is list && data.vendors.size() <= 50 && (data.vendors.size() == 0 || data.vendors[0] is map) &&
-             data.payments is list && data.payments.size() <= 200 && (data.payments.size() == 0 || data.payments[0] is map);
+             data.payments is list && data.payments.size() <= 200 && (data.payments.size() == 0 || data.payments[0] is map) &&
+             (!('productCatalog' in data) || data.productCatalog == null || (data.productCatalog is list && data.productCatalog.size() <= 60 && (data.productCatalog.size() == 0 || data.productCatalog[0] is map))) &&
+             (!('hiddenFromWorkspace' in data) || data.hiddenFromWorkspace == null || data.hiddenFromWorkspace is bool);
+    }
+
+    function isValidWorkspace(data) {
+      return data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             isValidId(data.ownerUid) &&
+             data.inviteCode is string && data.inviteCode.size() >= 6 && data.inviteCode.size() <= 24 &&
+             data.memberIds is list && data.memberIds.size() >= 1 && data.memberIds.size() <= 10 &&
+             (data.memberIds[0] is string) &&
+             data.ownerUid in data.memberIds &&
+             data.members is map && data.members.keys().size() >= 1 && data.members.keys().size() <= 10 &&
+             data.ownerUid in data.members.keys() &&
+             (!('lastJoinCode' in data) || data.lastJoinCode == null || (data.lastJoinCode is string && data.lastJoinCode.size() <= 24));
+    }
+
+    function isValidWorkspaceInvite(data, inviteCode) {
+      return isValidId(data.workspaceId) &&
+             data.workspaceName is string && data.workspaceName.size() >= 1 && data.workspaceName.size() <= 80 &&
+             isValidId(data.ownerUid) &&
+             data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 80 &&
+             isValidId(inviteCode);
+    }
+
+    function isValidSharedExpense(data, workspaceId) {
+      return data.workspaceId is string && data.workspaceId == workspaceId &&
+             isValidId(data.sourceExpenseId) &&
+             isValidId(data.ownerUid) &&
+             data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 80 &&
+             data.memberIds is list && data.memberIds.size() >= 1 && data.memberIds.size() <= 10 &&
+             (data.memberIds[0] is string) &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+             data.amount is number && data.amount >= 0 && data.amount <= 1000000000 &&
+             data.dateEpochMs is int && data.dateEpochMs > 0 &&
+             data.categoryId is string && data.categoryId.size() >= 1 && data.categoryId.size() <= 128 &&
+             data.categoryName is string && data.categoryName.size() >= 1 && data.categoryName.size() <= 60 &&
+             data.categoryIconKey is string && data.categoryIconKey.size() >= 1 && data.categoryIconKey.size() <= 30 &&
+             data.categoryColorIndex is int && data.categoryColorIndex >= 1 && data.categoryColorIndex <= 9 &&
+             data.subcategory is string && data.subcategory.size() <= 80 &&
+             data.paymentMode is string && data.paymentMode in ['UPI', 'Cash', 'Card', 'Bank'] &&
+             (!('sharedVehicleId' in data) || data.sharedVehicleId == null || (data.sharedVehicleId is string && data.sharedVehicleId.size() <= 128)) &&
+             (!('sharedVehicleOwnerUid' in data) || data.sharedVehicleOwnerUid == null || (data.sharedVehicleOwnerUid is string && data.sharedVehicleOwnerUid.size() <= 128)) &&
+             (!('sharedProjectId' in data) || data.sharedProjectId == null || (data.sharedProjectId is string && data.sharedProjectId.size() <= 128)) &&
+             (!('sharedProjectOwnerUid' in data) || data.sharedProjectOwnerUid == null || (data.sharedProjectOwnerUid is string && data.sharedProjectOwnerUid.size() <= 128)) &&
+             (!('odometerReading' in data) || data.odometerReading == null || (data.odometerReading is int && data.odometerReading >= 0 && data.odometerReading <= 2000000)) &&
+             (!('fuelPricePerLitre' in data) || data.fuelPricePerLitre == null || (data.fuelPricePerLitre is number && data.fuelPricePerLitre >= 0 && data.fuelPricePerLitre <= 100000)) &&
+             (!('fuelLitres' in data) || data.fuelLitres == null || (data.fuelLitres is number && data.fuelLitres >= 0 && data.fuelLitres <= 100000)) &&
+             (!('retainedForDeparture' in data) || data.retainedForDeparture == null || data.retainedForDeparture is bool);
+    }
+
+    function isValidSharedVehicle(data, workspaceId) {
+      return data.workspaceId is string && data.workspaceId == workspaceId &&
+             isValidId(data.sourceVehicleId) &&
+             isValidId(data.ownerUid) &&
+             data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 80 &&
+             data.memberIds is list && data.memberIds.size() <= 10 &&
+             (data.memberIds.size() == 0 || data.memberIds[0] is string) &&
+             data.contributorIds is list && data.contributorIds.size() <= 25 &&
+             (data.contributorIds.size() == 0 || data.contributorIds[0] is string) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.shortName is string && data.shortName.size() >= 1 && data.shortName.size() <= 40 &&
+             data.type is string && data.type in ['bike', 'car'] &&
+             data.plate is string && data.plate.size() >= 1 && data.plate.size() <= 30 &&
+             data.odometer is int && data.odometer >= 0 && data.odometer <= 2000000 &&
+             data.avgMileage is number && data.avgMileage >= 0 && data.avgMileage <= 200 &&
+             data.items is list && data.items.size() <= 40 && (data.items.size() == 0 || data.items[0] is map) &&
+             data.history is list && data.history.size() <= 100 && (data.history.size() == 0 || data.history[0] is map);
+    }
+
+    function isValidSharedProject(data, workspaceId) {
+      return data.workspaceId is string && data.workspaceId == workspaceId &&
+             isValidId(data.sourceProjectId) &&
+             isValidId(data.ownerUid) &&
+             data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 80 &&
+             data.memberIds is list && data.memberIds.size() <= 10 &&
+             (data.memberIds.size() == 0 || data.memberIds[0] is string) &&
+             data.contributorIds is list && data.contributorIds.size() <= 25 &&
+             (data.contributorIds.size() == 0 || data.contributorIds[0] is string) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+             data.subtitle is string && data.subtitle.size() <= 140 &&
+             data.iconKey is string && data.iconKey.size() >= 1 && data.iconKey.size() <= 30 &&
+             data.colorIndex is int && data.colorIndex >= 1 && data.colorIndex <= 9 &&
+             data.budget is number && data.budget > 0 && data.budget <= 1000000000 &&
+             data.phases is list && data.phases.size() <= 25 && (data.phases.size() == 0 || data.phases[0] is map) &&
+             data.vendors is list && data.vendors.size() <= 50 && (data.vendors.size() == 0 || data.vendors[0] is map) &&
+             data.payments is list && data.payments.size() <= 200 && (data.payments.size() == 0 || data.payments[0] is map) &&
+             data.productCatalog is list && data.productCatalog.size() <= 60 && (data.productCatalog.size() == 0 || data.productCatalog[0] is map);
+    }
+
+    function isValidSharedProjectContribution(data, workspaceId) {
+      return data.workspaceId is string && data.workspaceId == workspaceId &&
+             isValidId(data.sharedProjectId) &&
+             isValidId(data.projectOwnerUid) &&
+             isValidId(data.ownerUid) &&
+             data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 80 &&
+             data.memberIds is list && data.memberIds.size() >= 1 && data.memberIds.size() <= 10 &&
+             (data.memberIds[0] is string) &&
+             data.dateEpochMs is int && data.dateEpochMs > 0 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 140 &&
+             data.amount is number && data.amount >= 0 && data.amount <= 1000000000 &&
+             data.vendor is string && data.vendor.size() <= 80 &&
+             data.phaseName is string && data.phaseName.size() <= 80 &&
+             data.items is list && data.items.size() <= 40 && (data.items.size() == 0 || data.items[0] is map) &&
+             (!('linkedExpenseId' in data) || data.linkedExpenseId == null || (data.linkedExpenseId is string && data.linkedExpenseId.size() <= 128)) &&
+             (!('retainedForDeparture' in data) || data.retainedForDeparture == null || data.retainedForDeparture is bool);
+    }
+
+    function isValidSharedBill(data, workspaceId) {
+      return data.workspaceId is string && data.workspaceId == workspaceId &&
+             isValidId(data.sourceBillId) &&
+             isValidId(data.ownerUid) &&
+             data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 80 &&
+             data.memberIds is list && data.memberIds.size() >= 1 && data.memberIds.size() <= 10 &&
+             (data.memberIds[0] is string) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+             data.amount is number && data.amount > 0 && data.amount <= 1000000000 &&
+             data.dueEpochMs is int && data.dueEpochMs > 0 &&
+             data.repeat is string && data.repeat in ['Once', 'Monthly', 'Bi-monthly', 'Half-yearly', 'Yearly'] &&
+             data.reminder is string && data.reminder in ['On the day', '3 days before', '7 days before'] &&
+             data.categoryId is string && data.categoryId.size() >= 1 && data.categoryId.size() <= 128 &&
+             data.subcategory is string && data.subcategory.size() <= 80 &&
+             data.iconKey is string && data.iconKey.size() >= 1 && data.iconKey.size() <= 30 &&
+             data.autopay is bool &&
+             data.paid is bool &&
+             (!('paidOnEpochMs' in data) || data.paidOnEpochMs == null || (data.paidOnEpochMs is int && data.paidOnEpochMs > 0));
+    }
+
+    function isValidSharedCategory(data, workspaceId) {
+      return data.workspaceId is string && data.workspaceId == workspaceId &&
+             isValidId(data.sourceCategoryId) &&
+             isValidId(data.ownerUid) &&
+             data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 80 &&
+             data.memberIds is list && data.memberIds.size() >= 1 && data.memberIds.size() <= 10 &&
+             (data.memberIds[0] is string) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 60 &&
+             data.iconKey is string && data.iconKey.size() >= 1 && data.iconKey.size() <= 30 &&
+             data.colorIndex is int && data.colorIndex >= 1 && data.colorIndex <= 9 &&
+             data.subcategories is list && data.subcategories.size() <= 25 &&
+             (data.subcategories.size() == 0 || data.subcategories[0] is string) &&
+             data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 500;
     }
 
     match /users/{userId} {
@@ -113,7 +278,7 @@ service cloud.firestore {
       allow list: if false;
       allow create: if isValidId(userId) && isOwner(userId) &&
                        incoming().keys().hasAll(['userId', 'monthlyBudget', 'language', 'seeded', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['userId', 'monthlyBudget', 'language', 'seeded', 'displayName', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'monthlyBudget', 'language', 'seeded', 'displayName', 'workspaceId', 'contributedWorkspaceIds', 'createdAt', 'updatedAt']) &&
                        isValidTimestamp(incoming().createdAt) &&
                        isValidTimestamp(incoming().updatedAt) &&
                        isValidUserProfile(incoming(), userId);
@@ -122,7 +287,7 @@ service cloud.firestore {
                        incoming().userId == existing().userId &&
                        incoming().createdAt == existing().createdAt &&
                        isValidTimestamp(incoming().updatedAt) &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['monthlyBudget', 'language', 'seeded', 'displayName', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['monthlyBudget', 'language', 'seeded', 'displayName', 'workspaceId', 'contributedWorkspaceIds', 'updatedAt']);
       allow delete: if isValidId(userId) && isOwner(userId);
 
       match /categories/{categoryId} {
@@ -130,7 +295,7 @@ service cloud.firestore {
         allow list: if isOwner(userId);
         allow create: if isValidId(userId) && isValidId(categoryId) && isOwner(userId) &&
                          incoming().keys().hasAll(['userId', 'name', 'iconKey', 'colorIndex', 'subcategories', 'sortOrder', 'createdAt', 'updatedAt']) &&
-                         incoming().keys().hasOnly(['userId', 'name', 'iconKey', 'colorIndex', 'subcategories', 'sortOrder', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'name', 'iconKey', 'colorIndex', 'subcategories', 'sortOrder', 'hiddenFromWorkspace', 'createdAt', 'updatedAt']) &&
                          isValidTimestamp(incoming().createdAt) &&
                          isValidTimestamp(incoming().updatedAt) &&
                          isValidCategory(incoming(), userId);
@@ -139,7 +304,7 @@ service cloud.firestore {
                          incoming().userId == existing().userId &&
                          incoming().createdAt == existing().createdAt &&
                          isValidTimestamp(incoming().updatedAt) &&
-                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'iconKey', 'colorIndex', 'subcategories', 'sortOrder', 'updatedAt']);
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'iconKey', 'colorIndex', 'subcategories', 'sortOrder', 'hiddenFromWorkspace', 'updatedAt']);
         allow delete: if isValidId(userId) && isValidId(categoryId) && isOwner(userId);
       }
 
@@ -148,7 +313,7 @@ service cloud.firestore {
         allow list: if isOwner(userId);
         allow create: if isValidId(userId) && isValidId(expenseId) && isOwner(userId) &&
                          incoming().keys().hasAll(['userId', 'title', 'amount', 'dateEpochMs', 'categoryId', 'subcategory', 'paymentMode', 'createdAt', 'updatedAt']) &&
-                         incoming().keys().hasOnly(['userId', 'title', 'amount', 'dateEpochMs', 'categoryId', 'subcategory', 'paymentMode', 'projectId', 'vehicleId', 'gstin', 'billNumber', 'taxableValue', 'cgst', 'sgst', 'igst', 'roundOff', 'items', 'attachmentNotes', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'title', 'amount', 'dateEpochMs', 'categoryId', 'subcategory', 'paymentMode', 'isPrivate', 'projectId', 'vehicleId', 'gstin', 'billNumber', 'taxableValue', 'cgst', 'sgst', 'igst', 'roundOff', 'items', 'attachmentNotes', 'odometerReading', 'fuelPricePerLitre', 'fuelLitres', 'createdAt', 'updatedAt']) &&
                          isValidTimestamp(incoming().createdAt) &&
                          isValidTimestamp(incoming().updatedAt) &&
                          isValidExpense(incoming(), userId);
@@ -157,7 +322,7 @@ service cloud.firestore {
                          incoming().userId == existing().userId &&
                          incoming().createdAt == existing().createdAt &&
                          isValidTimestamp(incoming().updatedAt) &&
-                         incoming().diff(existing()).affectedKeys().hasOnly(['title', 'amount', 'dateEpochMs', 'categoryId', 'subcategory', 'paymentMode', 'projectId', 'vehicleId', 'gstin', 'billNumber', 'taxableValue', 'cgst', 'sgst', 'igst', 'roundOff', 'items', 'attachmentNotes', 'updatedAt']);
+                         incoming().diff(existing()).affectedKeys().hasOnly(['title', 'amount', 'dateEpochMs', 'categoryId', 'subcategory', 'paymentMode', 'isPrivate', 'projectId', 'vehicleId', 'gstin', 'billNumber', 'taxableValue', 'cgst', 'sgst', 'igst', 'roundOff', 'items', 'attachmentNotes', 'odometerReading', 'fuelPricePerLitre', 'fuelLitres', 'updatedAt']);
         allow delete: if isValidId(userId) && isValidId(expenseId) && isOwner(userId);
       }
 
@@ -166,7 +331,7 @@ service cloud.firestore {
         allow list: if isOwner(userId);
         allow create: if isValidId(userId) && isValidId(vehicleId) && isOwner(userId) &&
                          incoming().keys().hasAll(['userId', 'name', 'shortName', 'type', 'plate', 'odometer', 'avgMileage', 'items', 'history', 'createdAt', 'updatedAt']) &&
-                         incoming().keys().hasOnly(['userId', 'name', 'shortName', 'type', 'plate', 'odometer', 'avgMileage', 'items', 'history', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'name', 'shortName', 'type', 'plate', 'odometer', 'avgMileage', 'items', 'history', 'hiddenFromWorkspace', 'createdAt', 'updatedAt']) &&
                          isValidTimestamp(incoming().createdAt) &&
                          isValidTimestamp(incoming().updatedAt) &&
                          isValidVehicle(incoming(), userId);
@@ -175,7 +340,7 @@ service cloud.firestore {
                          incoming().userId == existing().userId &&
                          incoming().createdAt == existing().createdAt &&
                          isValidTimestamp(incoming().updatedAt) &&
-                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'shortName', 'type', 'plate', 'odometer', 'avgMileage', 'items', 'history', 'updatedAt']);
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'shortName', 'type', 'plate', 'odometer', 'avgMileage', 'items', 'history', 'hiddenFromWorkspace', 'updatedAt']);
         allow delete: if isValidId(userId) && isValidId(vehicleId) && isOwner(userId);
       }
 
@@ -184,7 +349,7 @@ service cloud.firestore {
         allow list: if isOwner(userId);
         allow create: if isValidId(userId) && isValidId(billId) && isOwner(userId) &&
                          incoming().keys().hasAll(['userId', 'name', 'amount', 'dueEpochMs', 'repeat', 'reminder', 'categoryId', 'subcategory', 'iconKey', 'autopay', 'paid', 'createdAt', 'updatedAt']) &&
-                         incoming().keys().hasOnly(['userId', 'name', 'amount', 'dueEpochMs', 'repeat', 'reminder', 'categoryId', 'subcategory', 'iconKey', 'autopay', 'paid', 'paidOnEpochMs', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'name', 'amount', 'dueEpochMs', 'repeat', 'reminder', 'categoryId', 'subcategory', 'iconKey', 'autopay', 'paid', 'paidOnEpochMs', 'hiddenFromWorkspace', 'createdAt', 'updatedAt']) &&
                          isValidTimestamp(incoming().createdAt) &&
                          isValidTimestamp(incoming().updatedAt) &&
                          isValidBill(incoming(), userId);
@@ -193,7 +358,7 @@ service cloud.firestore {
                          incoming().userId == existing().userId &&
                          incoming().createdAt == existing().createdAt &&
                          isValidTimestamp(incoming().updatedAt) &&
-                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'amount', 'dueEpochMs', 'repeat', 'reminder', 'categoryId', 'subcategory', 'iconKey', 'autopay', 'paid', 'paidOnEpochMs', 'updatedAt']);
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'amount', 'dueEpochMs', 'repeat', 'reminder', 'categoryId', 'subcategory', 'iconKey', 'autopay', 'paid', 'paidOnEpochMs', 'hiddenFromWorkspace', 'updatedAt']);
         allow delete: if isValidId(userId) && isValidId(billId) && isOwner(userId);
       }
 
@@ -202,7 +367,7 @@ service cloud.firestore {
         allow list: if isOwner(userId);
         allow create: if isValidId(userId) && isValidId(projectId) && isOwner(userId) &&
                          incoming().keys().hasAll(['userId', 'name', 'subtitle', 'iconKey', 'colorIndex', 'budget', 'phases', 'vendors', 'payments', 'createdAt', 'updatedAt']) &&
-                         incoming().keys().hasOnly(['userId', 'name', 'subtitle', 'iconKey', 'colorIndex', 'budget', 'phases', 'vendors', 'payments', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'name', 'subtitle', 'iconKey', 'colorIndex', 'budget', 'phases', 'vendors', 'payments', 'productCatalog', 'hiddenFromWorkspace', 'createdAt', 'updatedAt']) &&
                          isValidTimestamp(incoming().createdAt) &&
                          isValidTimestamp(incoming().updatedAt) &&
                          isValidProject(incoming(), userId);
@@ -211,8 +376,365 @@ service cloud.firestore {
                          incoming().userId == existing().userId &&
                          incoming().createdAt == existing().createdAt &&
                          isValidTimestamp(incoming().updatedAt) &&
-                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'subtitle', 'iconKey', 'colorIndex', 'budget', 'phases', 'vendors', 'payments', 'updatedAt']);
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'subtitle', 'iconKey', 'colorIndex', 'budget', 'phases', 'vendors', 'payments', 'productCatalog', 'hiddenFromWorkspace', 'updatedAt']);
         allow delete: if isValidId(userId) && isValidId(projectId) && isOwner(userId);
+      }
+    }
+
+    match /workspaceInvites/{inviteCode} {
+      allow get: if isValidId(inviteCode) && isSignedIn();
+      allow list: if false;
+      allow create: if isValidId(inviteCode) && isSignedIn() &&
+                       incoming().keys().hasAll(['workspaceId', 'workspaceName', 'ownerUid', 'ownerName', 'createdAt']) &&
+                       incoming().keys().hasOnly(['workspaceId', 'workspaceName', 'ownerUid', 'ownerName', 'createdAt']) &&
+                       incoming().ownerUid == request.auth.uid &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidWorkspaceInvite(incoming(), inviteCode);
+      allow update: if false;
+      allow delete: if isValidId(inviteCode) && isSignedIn() && existing().ownerUid == request.auth.uid;
+    }
+
+    match /workspaces/{workspaceId} {
+      allow get: if isValidId(workspaceId) && isSignedIn() && (request.auth.uid in existing().memberIds);
+      allow list: if false;
+      allow create: if isValidId(workspaceId) && isSignedIn() &&
+                       incoming().keys().hasAll(['name', 'ownerUid', 'inviteCode', 'memberIds', 'members', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['name', 'ownerUid', 'inviteCode', 'memberIds', 'members', 'lastJoinCode', 'createdAt', 'updatedAt']) &&
+                       incoming().ownerUid == request.auth.uid &&
+                       incoming().memberIds.size() == 1 &&
+                       request.auth.uid in incoming().memberIds &&
+                       isValidTimestamp(incoming().createdAt) &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       isValidWorkspace(incoming());
+      allow update: if isValidId(workspaceId) && isSignedIn() &&
+                       isValidWorkspace(incoming()) &&
+                       incoming().ownerUid == existing().ownerUid &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) && (
+                         // Action 1: Owner updates name, inviteCode, or kicks member
+                         (existing().ownerUid == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'inviteCode', 'memberIds', 'members', 'updatedAt'])) ||
+                         // Action 2: Authenticated user joins with a valid invite code
+                         (!(request.auth.uid in existing().memberIds) &&
+                          (request.auth.uid in incoming().memberIds) &&
+                          incoming().memberIds.hasAll(existing().memberIds) &&
+                          incoming().memberIds.size() == existing().memberIds.size() + 1 &&
+                          incoming().members.keys().hasAll(existing().members.keys()) &&
+                          incoming().members.keys().size() == existing().members.keys().size() + 1 &&
+                          (request.auth.uid in incoming().members.keys()) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'members', 'lastJoinCode', 'updatedAt']) &&
+                          ('lastJoinCode' in incoming()) &&
+                          incoming().lastJoinCode is string &&
+                          exists(/databases/$(database)/documents/workspaceInvites/$(incoming().lastJoinCode)) &&
+                          get(/databases/$(database)/documents/workspaceInvites/$(incoming().lastJoinCode)).data.workspaceId == workspaceId) ||
+                         // Action 3: Non-owner member leaves workspace
+                         ((request.auth.uid in existing().memberIds) &&
+                          request.auth.uid != existing().ownerUid &&
+                          !(request.auth.uid in incoming().memberIds) &&
+                          existing().memberIds.hasAll(incoming().memberIds) &&
+                          incoming().memberIds.size() == existing().memberIds.size() - 1 &&
+                          !(request.auth.uid in incoming().members.keys()) &&
+                          existing().members.keys().hasAll(incoming().members.keys()) &&
+                          incoming().members.keys().size() == existing().members.keys().size() - 1 &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'members', 'updatedAt']))
+                       );
+      allow delete: if isValidId(workspaceId) && isSignedIn() && existing().ownerUid == request.auth.uid;
+
+      match /expenses/{sharedExpenseId} {
+        allow get: if isValidId(workspaceId) && isValidId(sharedExpenseId) &&
+                      isSignedIn() && (request.auth.uid in existing().memberIds);
+        allow list: if isSignedIn() && (request.auth.uid in existing().memberIds);
+        allow create: if isValidId(workspaceId) && isValidId(sharedExpenseId) && isSignedIn() &&
+                         incoming().keys().hasAll(['workspaceId', 'sourceExpenseId', 'ownerUid', 'ownerName', 'memberIds', 'title', 'amount', 'dateEpochMs', 'categoryId', 'categoryName', 'categoryIconKey', 'categoryColorIndex', 'subcategory', 'paymentMode', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['workspaceId', 'sourceExpenseId', 'ownerUid', 'ownerName', 'memberIds', 'title', 'amount', 'dateEpochMs', 'categoryId', 'categoryName', 'categoryIconKey', 'categoryColorIndex', 'subcategory', 'paymentMode', 'sharedVehicleId', 'sharedVehicleOwnerUid', 'sharedProjectId', 'sharedProjectOwnerUid', 'odometerReading', 'fuelPricePerLitre', 'fuelLitres', 'retainedForDeparture', 'createdAt', 'updatedAt']) &&
+                         incoming().ownerUid == request.auth.uid &&
+                         (request.auth.uid in incoming().memberIds) &&
+                         (!('retainedForDeparture' in incoming()) || incoming().retainedForDeparture == false) &&
+                         isValidTimestamp(incoming().createdAt) &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         isValidSharedExpense(incoming(), workspaceId) &&
+                         isWsMember(workspaceId) &&
+                         wsData(workspaceId).memberIds.hasAll(incoming().memberIds);
+        allow update: if isValidId(workspaceId) && isValidId(sharedExpenseId) && isSignedIn() &&
+                         isValidSharedExpense(incoming(), workspaceId) &&
+                         incoming().workspaceId == existing().workspaceId &&
+                         incoming().sourceExpenseId == existing().sourceExpenseId &&
+                         incoming().ownerUid == existing().ownerUid &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidTimestamp(incoming().updatedAt) && (
+                           // Action 1: Owner updates active shared expense (prohibited once retainedForDeparture or after departure)
+                           (existing().ownerUid == request.auth.uid &&
+                            isWsMember(workspaceId) &&
+                            (!('retainedForDeparture' in existing()) || existing().retainedForDeparture == false) &&
+                            (!('retainedForDeparture' in incoming()) || incoming().retainedForDeparture == false) &&
+                            (request.auth.uid in incoming().memberIds) &&
+                            wsData(workspaceId).memberIds.hasAll(incoming().memberIds) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'ownerName', 'amount', 'dateEpochMs', 'categoryId', 'categoryName', 'categoryIconKey', 'categoryColorIndex', 'subcategory', 'paymentMode', 'sharedVehicleId', 'sharedVehicleOwnerUid', 'sharedProjectId', 'sharedProjectOwnerUid', 'odometerReading', 'fuelPricePerLitre', 'fuelLitres', 'memberIds', 'updatedAt'])) ||
+                           // Action 2: Workspace owner kicks a member (shrinks memberIds or marks retainedForDeparture for foreign contribution)
+                           (isWsOwner(workspaceId) &&
+                            existing().memberIds.hasAll(incoming().memberIds) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'retainedForDeparture', 'updatedAt'])) ||
+                           // Action 3a: Leaving member converts their own foreign contribution to retained read-only
+                           (isWsMember(workspaceId) &&
+                            existing().ownerUid == request.auth.uid &&
+                            incoming().memberIds == [request.auth.uid] &&
+                            incoming().retainedForDeparture == true &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'retainedForDeparture', 'updatedAt'])) ||
+                           // Action 3b: Leaving member removes only themselves from another member's shared expense
+                           (isWsMember(workspaceId) &&
+                            (request.auth.uid in existing().memberIds) &&
+                            !(request.auth.uid in incoming().memberIds) &&
+                            existing().memberIds.hasAll(incoming().memberIds) &&
+                            incoming().memberIds.size() == existing().memberIds.size() - 1 &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt']))
+                         );
+        allow delete: if isValidId(workspaceId) && isValidId(sharedExpenseId) && isSignedIn() && (
+                         existing().ownerUid == request.auth.uid ||
+                         isWsOwner(workspaceId)
+                       );
+      }
+
+      match /vehicles/{sharedVehicleId} {
+        allow get: if isValidId(workspaceId) && isValidId(sharedVehicleId) && isSignedIn() &&
+                      ((request.auth.uid in existing().memberIds) || (request.auth.uid in existing().contributorIds));
+        allow list: if isSignedIn() &&
+                       ((request.auth.uid in existing().memberIds) || (request.auth.uid in existing().contributorIds));
+        allow create: if isValidId(workspaceId) && isValidId(sharedVehicleId) && isSignedIn() &&
+                         incoming().keys().hasAll(['workspaceId', 'sourceVehicleId', 'ownerUid', 'ownerName', 'memberIds', 'contributorIds', 'name', 'shortName', 'type', 'plate', 'odometer', 'avgMileage', 'items', 'history', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['workspaceId', 'sourceVehicleId', 'ownerUid', 'ownerName', 'memberIds', 'contributorIds', 'name', 'shortName', 'type', 'plate', 'odometer', 'avgMileage', 'items', 'history', 'createdAt', 'updatedAt']) &&
+                         incoming().ownerUid == request.auth.uid &&
+                         incoming().contributorIds.size() == 0 &&
+                         isValidTimestamp(incoming().createdAt) &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         isValidSharedVehicle(incoming(), workspaceId) &&
+                         isWsMember(workspaceId) &&
+                         wsData(workspaceId).memberIds.hasAll(incoming().memberIds);
+        allow update: if isValidId(workspaceId) && isValidId(sharedVehicleId) && isSignedIn() &&
+                         isValidSharedVehicle(incoming(), workspaceId) &&
+                         incoming().workspaceId == existing().workspaceId &&
+                         incoming().sourceVehicleId == existing().sourceVehicleId &&
+                         incoming().ownerUid == existing().ownerUid &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidTimestamp(incoming().updatedAt) && (
+                           // Action 1: Vehicle owner updates vehicle details / memberIds while preserving contributorIds
+                           (existing().ownerUid == request.auth.uid &&
+                            isWsMember(workspaceId) &&
+                            wsData(workspaceId).memberIds.hasAll(incoming().memberIds) &&
+                            incoming().contributorIds.hasAll(existing().contributorIds) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['ownerName', 'memberIds', 'name', 'shortName', 'type', 'plate', 'odometer', 'avgMileage', 'items', 'history', 'updatedAt'])) ||
+                           // Action 2: Active workspace member records themselves as a contributor
+                           (isWsMember(workspaceId) &&
+                            incoming().contributorIds.hasAll(existing().contributorIds) &&
+                            incoming().contributorIds.size() <= existing().contributorIds.size() + 1 &&
+                            (request.auth.uid in incoming().contributorIds) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['contributorIds', 'updatedAt'])) ||
+                           // Action 3: Workspace owner updates memberIds when removing a member
+                           (isWsOwner(workspaceId) &&
+                            existing().memberIds.hasAll(incoming().memberIds) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])) ||
+                           // Action 4: Leaving member removes only themselves from memberIds (retains contributorIds)
+                           (isWsMember(workspaceId) &&
+                            (request.auth.uid in existing().memberIds) &&
+                            !(request.auth.uid in incoming().memberIds) &&
+                            existing().memberIds.hasAll(incoming().memberIds) &&
+                            incoming().memberIds.size() == existing().memberIds.size() - 1 &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt']))
+                         );
+        allow delete: if isValidId(workspaceId) && isValidId(sharedVehicleId) && isSignedIn() && (
+                         existing().ownerUid == request.auth.uid ||
+                         isWsOwner(workspaceId)
+                       );
+      }
+
+      match /projects/{sharedProjectId} {
+        allow get: if isValidId(workspaceId) && isValidId(sharedProjectId) && isSignedIn() &&
+                      ((request.auth.uid in existing().memberIds) || (request.auth.uid in existing().contributorIds));
+        allow list: if isSignedIn() &&
+                       ((request.auth.uid in existing().memberIds) || (request.auth.uid in existing().contributorIds));
+        allow create: if isValidId(workspaceId) && isValidId(sharedProjectId) && isSignedIn() &&
+                         incoming().keys().hasAll(['workspaceId', 'sourceProjectId', 'ownerUid', 'ownerName', 'memberIds', 'contributorIds', 'name', 'subtitle', 'iconKey', 'colorIndex', 'budget', 'phases', 'vendors', 'payments', 'productCatalog', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['workspaceId', 'sourceProjectId', 'ownerUid', 'ownerName', 'memberIds', 'contributorIds', 'name', 'subtitle', 'iconKey', 'colorIndex', 'budget', 'phases', 'vendors', 'payments', 'productCatalog', 'createdAt', 'updatedAt']) &&
+                         incoming().ownerUid == request.auth.uid &&
+                         incoming().contributorIds.size() == 0 &&
+                         isValidTimestamp(incoming().createdAt) &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         isValidSharedProject(incoming(), workspaceId) &&
+                         isWsMember(workspaceId) &&
+                         wsData(workspaceId).memberIds.hasAll(incoming().memberIds);
+        allow update: if isValidId(workspaceId) && isValidId(sharedProjectId) && isSignedIn() &&
+                         isValidSharedProject(incoming(), workspaceId) &&
+                         incoming().workspaceId == existing().workspaceId &&
+                         incoming().sourceProjectId == existing().sourceProjectId &&
+                         incoming().ownerUid == existing().ownerUid &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidTimestamp(incoming().updatedAt) && (
+                           // Action 1: Project owner updates project details / memberIds while preserving contributorIds
+                           (existing().ownerUid == request.auth.uid &&
+                            isWsMember(workspaceId) &&
+                            wsData(workspaceId).memberIds.hasAll(incoming().memberIds) &&
+                            incoming().contributorIds.hasAll(existing().contributorIds) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['ownerName', 'memberIds', 'name', 'subtitle', 'iconKey', 'colorIndex', 'budget', 'phases', 'vendors', 'payments', 'productCatalog', 'updatedAt'])) ||
+                           // Action 2: Active workspace member records themselves as a contributor
+                           (isWsMember(workspaceId) &&
+                            incoming().contributorIds.hasAll(existing().contributorIds) &&
+                            incoming().contributorIds.size() <= existing().contributorIds.size() + 1 &&
+                            (request.auth.uid in incoming().contributorIds) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['contributorIds', 'updatedAt'])) ||
+                           // Action 3: Workspace owner updates memberIds when removing a member
+                           (isWsOwner(workspaceId) &&
+                            existing().memberIds.hasAll(incoming().memberIds) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])) ||
+                           // Action 4: Leaving member removes only themselves from memberIds (retains contributorIds)
+                           (isWsMember(workspaceId) &&
+                            (request.auth.uid in existing().memberIds) &&
+                            !(request.auth.uid in incoming().memberIds) &&
+                            existing().memberIds.hasAll(incoming().memberIds) &&
+                            incoming().memberIds.size() == existing().memberIds.size() - 1 &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt']))
+                         );
+        allow delete: if isValidId(workspaceId) && isValidId(sharedProjectId) && isSignedIn() && (
+                         existing().ownerUid == request.auth.uid ||
+                         isWsOwner(workspaceId)
+                       );
+      }
+
+      match /projectContributions/{contributionId} {
+        allow get: if isValidId(workspaceId) && isValidId(contributionId) &&
+                      isSignedIn() && (request.auth.uid in existing().memberIds);
+        allow list: if isSignedIn() && (request.auth.uid in existing().memberIds);
+        allow create: if isValidId(workspaceId) && isValidId(contributionId) && isSignedIn() &&
+                         incoming().keys().hasAll(['workspaceId', 'sharedProjectId', 'projectOwnerUid', 'ownerUid', 'ownerName', 'memberIds', 'dateEpochMs', 'title', 'amount', 'vendor', 'phaseName', 'items', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['workspaceId', 'sharedProjectId', 'projectOwnerUid', 'ownerUid', 'ownerName', 'memberIds', 'dateEpochMs', 'title', 'amount', 'vendor', 'phaseName', 'items', 'linkedExpenseId', 'retainedForDeparture', 'createdAt', 'updatedAt']) &&
+                         incoming().ownerUid == request.auth.uid &&
+                         (request.auth.uid in incoming().memberIds) &&
+                         (!('retainedForDeparture' in incoming()) || incoming().retainedForDeparture == false) &&
+                         isValidTimestamp(incoming().createdAt) &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         isValidSharedProjectContribution(incoming(), workspaceId) &&
+                         isWsMember(workspaceId) &&
+                         wsData(workspaceId).memberIds.hasAll(incoming().memberIds);
+        allow update: if isValidId(workspaceId) && isValidId(contributionId) && isSignedIn() &&
+                         isValidSharedProjectContribution(incoming(), workspaceId) &&
+                         incoming().workspaceId == existing().workspaceId &&
+                         incoming().sharedProjectId == existing().sharedProjectId &&
+                         incoming().projectOwnerUid == existing().projectOwnerUid &&
+                         incoming().ownerUid == existing().ownerUid &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidTimestamp(incoming().updatedAt) && (
+                           // Action 1: Contributor updates active contribution (blocked once departed/retained)
+                           (existing().ownerUid == request.auth.uid &&
+                            isWsMember(workspaceId) &&
+                            (!('retainedForDeparture' in existing()) || existing().retainedForDeparture == false) &&
+                            (!('retainedForDeparture' in incoming()) || incoming().retainedForDeparture == false) &&
+                            (request.auth.uid in incoming().memberIds) &&
+                            wsData(workspaceId).memberIds.hasAll(incoming().memberIds) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['ownerName', 'memberIds', 'dateEpochMs', 'title', 'amount', 'vendor', 'phaseName', 'items', 'linkedExpenseId', 'updatedAt'])) ||
+                           // Action 2: Workspace owner shrinks memberIds or marks retainedForDeparture on kick
+                           (isWsOwner(workspaceId) &&
+                            existing().memberIds.hasAll(incoming().memberIds) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'retainedForDeparture', 'updatedAt'])) ||
+                           // Action 3a: Leaving member converts their own foreign project contribution to retained read-only
+                           (isWsMember(workspaceId) &&
+                            existing().ownerUid == request.auth.uid &&
+                            incoming().memberIds == [request.auth.uid] &&
+                            incoming().retainedForDeparture == true &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'retainedForDeparture', 'updatedAt'])) ||
+                           // Action 3b: Leaving member removes only themselves from another member's contribution
+                           (isWsMember(workspaceId) &&
+                            (request.auth.uid in existing().memberIds) &&
+                            !(request.auth.uid in incoming().memberIds) &&
+                            existing().memberIds.hasAll(incoming().memberIds) &&
+                            incoming().memberIds.size() == existing().memberIds.size() - 1 &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt']))
+                         );
+        allow delete: if isValidId(workspaceId) && isValidId(contributionId) && isSignedIn() && (
+                         existing().ownerUid == request.auth.uid ||
+                         isWsOwner(workspaceId)
+                       );
+      }
+
+      match /bills/{sharedBillId} {
+        allow get: if isValidId(workspaceId) && isValidId(sharedBillId) &&
+                      isSignedIn() && (request.auth.uid in existing().memberIds);
+        allow list: if isSignedIn() && (request.auth.uid in existing().memberIds);
+        allow create: if isValidId(workspaceId) && isValidId(sharedBillId) && isSignedIn() &&
+                         incoming().keys().hasAll(['workspaceId', 'sourceBillId', 'ownerUid', 'ownerName', 'memberIds', 'name', 'amount', 'dueEpochMs', 'repeat', 'reminder', 'categoryId', 'subcategory', 'iconKey', 'autopay', 'paid', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['workspaceId', 'sourceBillId', 'ownerUid', 'ownerName', 'memberIds', 'name', 'amount', 'dueEpochMs', 'repeat', 'reminder', 'categoryId', 'subcategory', 'iconKey', 'autopay', 'paid', 'paidOnEpochMs', 'createdAt', 'updatedAt']) &&
+                         incoming().ownerUid == request.auth.uid &&
+                         (request.auth.uid in incoming().memberIds) &&
+                         isValidTimestamp(incoming().createdAt) &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         isValidSharedBill(incoming(), workspaceId) &&
+                         isWsMember(workspaceId) &&
+                         wsData(workspaceId).memberIds.hasAll(incoming().memberIds);
+        allow update: if isValidId(workspaceId) && isValidId(sharedBillId) && isSignedIn() &&
+                         isValidSharedBill(incoming(), workspaceId) &&
+                         incoming().workspaceId == existing().workspaceId &&
+                         incoming().sourceBillId == existing().sourceBillId &&
+                         incoming().ownerUid == existing().ownerUid &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidTimestamp(incoming().updatedAt) && (
+                           (existing().ownerUid == request.auth.uid &&
+                            isWsMember(workspaceId) &&
+                            (request.auth.uid in incoming().memberIds) &&
+                            wsData(workspaceId).memberIds.hasAll(incoming().memberIds) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['ownerName', 'memberIds', 'name', 'amount', 'dueEpochMs', 'repeat', 'reminder', 'categoryId', 'subcategory', 'iconKey', 'autopay', 'paid', 'paidOnEpochMs', 'updatedAt'])) ||
+                           (isWsOwner(workspaceId) &&
+                            existing().memberIds.hasAll(incoming().memberIds) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])) ||
+                           (isWsMember(workspaceId) &&
+                            (request.auth.uid in existing().memberIds) &&
+                            !(request.auth.uid in incoming().memberIds) &&
+                            existing().memberIds.hasAll(incoming().memberIds) &&
+                            incoming().memberIds.size() == existing().memberIds.size() - 1 &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt']))
+                         );
+        allow delete: if isValidId(workspaceId) && isValidId(sharedBillId) && isSignedIn() && (
+                         existing().ownerUid == request.auth.uid ||
+                         isWsOwner(workspaceId)
+                       );
+      }
+
+      match /categories/{sharedCategoryId} {
+        allow get: if isValidId(workspaceId) && isValidId(sharedCategoryId) &&
+                      isSignedIn() && (request.auth.uid in existing().memberIds);
+        allow list: if isSignedIn() && (request.auth.uid in existing().memberIds);
+        allow create: if isValidId(workspaceId) && isValidId(sharedCategoryId) && isSignedIn() &&
+                         incoming().keys().hasAll(['workspaceId', 'sourceCategoryId', 'ownerUid', 'ownerName', 'memberIds', 'name', 'iconKey', 'colorIndex', 'subcategories', 'sortOrder', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['workspaceId', 'sourceCategoryId', 'ownerUid', 'ownerName', 'memberIds', 'name', 'iconKey', 'colorIndex', 'subcategories', 'sortOrder', 'createdAt', 'updatedAt']) &&
+                         incoming().ownerUid == request.auth.uid &&
+                         (request.auth.uid in incoming().memberIds) &&
+                         isValidTimestamp(incoming().createdAt) &&
+                         isValidTimestamp(incoming().updatedAt) &&
+                         isValidSharedCategory(incoming(), workspaceId) &&
+                         isWsMember(workspaceId) &&
+                         wsData(workspaceId).memberIds.hasAll(incoming().memberIds);
+        allow update: if isValidId(workspaceId) && isValidId(sharedCategoryId) && isSignedIn() &&
+                         isValidSharedCategory(incoming(), workspaceId) &&
+                         incoming().workspaceId == existing().workspaceId &&
+                         incoming().sourceCategoryId == existing().sourceCategoryId &&
+                         incoming().ownerUid == existing().ownerUid &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidTimestamp(incoming().updatedAt) && (
+                           (existing().ownerUid == request.auth.uid &&
+                            isWsMember(workspaceId) &&
+                            (request.auth.uid in incoming().memberIds) &&
+                            wsData(workspaceId).memberIds.hasAll(incoming().memberIds) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['ownerName', 'memberIds', 'name', 'iconKey', 'colorIndex', 'subcategories', 'sortOrder', 'updatedAt'])) ||
+                           (isWsOwner(workspaceId) &&
+                            existing().memberIds.hasAll(incoming().memberIds) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])) ||
+                           (isWsMember(workspaceId) &&
+                            (request.auth.uid in existing().memberIds) &&
+                            !(request.auth.uid in incoming().memberIds) &&
+                            existing().memberIds.hasAll(incoming().memberIds) &&
+                            incoming().memberIds.size() == existing().memberIds.size() - 1 &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt']))
+                         );
+        allow delete: if isValidId(workspaceId) && isValidId(sharedCategoryId) && isSignedIn() && (
+                         existing().ownerUid == request.auth.uid ||
+                         isWsOwner(workspaceId)
+                       );
       }
     }
   }

@@ -29,7 +29,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -77,13 +76,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.data.model.Category
 import com.example.data.model.Expense
@@ -93,10 +92,10 @@ import com.example.data.model.ScannedBillDraft
 import com.example.data.model.ScannedBillItem
 import com.example.data.model.ServiceStatus
 import com.example.data.model.Vehicle
-import com.example.ui.components.CategoryTile
 import com.example.ui.components.SelavuCard
 import com.example.ui.components.SelavuDivider
 import com.example.ui.components.SelavuFilterChip
+import com.example.ui.components.SelavuTextField
 import com.example.ui.components.SelavuTopNavBar
 import com.example.ui.components.StatusPill
 import com.example.ui.theme.SelavuTheme
@@ -121,7 +120,9 @@ fun AddExpenseScreen(
     initialCategoryId: String?,
     initialSubcategory: String?,
     initialVehicleId: String?,
+    editingExpense: Expense? = null,
     isSaving: Boolean,
+    inWorkspace: Boolean = false,
     onBack: () -> Unit,
     onSwitchToScan: () -> Unit,
     onShowToast: (String) -> Unit,
@@ -134,53 +135,105 @@ fun AddExpenseScreen(
         projectToCharge: Project?
     ) -> Unit
 ) {
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
     val strings = selavuStrings()
     val nowMs = remember { System.currentTimeMillis() }
+    val isEditMode = editingExpense != null
+    val editKey = editingExpense?.id ?: "__new__"
 
-    val defaultCatId = initialCategoryId?.takeIf { id -> categories.any { it.id == id } }
+    fun formatCleanDecimal(value: Double?): String {
+        if (value == null || value <= 0.0) return ""
+        return if (value % 1.0 == 0.0) value.toInt().toString() else "%.2f".format(value)
+    }
+
+    val defaultCatId = editingExpense?.categoryId?.takeIf { id -> categories.any { it.id == id } }
+        ?: initialCategoryId?.takeIf { id -> categories.any { it.id == id } }
         ?: categories.firstOrNull()?.id ?: "groc"
-    var selectedCatId by rememberSaveable { mutableStateOf(defaultCatId) }
+    var selectedCatId by rememberSaveable(editKey) { mutableStateOf(defaultCatId) }
     val selectedCategory = categories.firstOrNull { it.id == selectedCatId } ?: categories.firstOrNull()
 
-    var selectedSub by rememberSaveable {
+    var selectedSub by rememberSaveable(editKey) {
         mutableStateOf(
-            initialSubcategory?.takeIf { it.isNotBlank() }
+            editingExpense?.subcategory
+                ?: initialSubcategory?.takeIf { it.isNotBlank() }
                 ?: selectedCategory?.subcategories?.firstOrNull().orEmpty()
         )
     }
 
-    LaunchedEffect(categories) {
+    LaunchedEffect(categories, editKey) {
         if (categories.isNotEmpty() && categories.none { it.id == selectedCatId }) {
-            selectedCatId = categories.first().id
+            val editCat = editingExpense?.categoryId
+            selectedCatId = if (editCat != null && categories.any { it.id == editCat }) {
+                editCat
+            } else {
+                categories.first().id
+            }
         }
     }
 
     LaunchedEffect(selectedCatId, categories) {
         val subs = categories.firstOrNull { it.id == selectedCatId }?.subcategories.orEmpty()
-        if (subs.isNotEmpty() && selectedSub !in subs) {
+        if (subs.isNotEmpty() && selectedSub !in subs &&
+            (editingExpense == null || selectedCatId != editingExpense.categoryId || selectedSub.isBlank())
+        ) {
             selectedSub = subs.first()
         }
     }
 
-    var amountText by rememberSaveable { mutableStateOf("") }
-    var titleText by rememberSaveable { mutableStateOf("") }
-    var dateEpochMs by rememberSaveable { mutableStateOf(nowMs) }
+    var amountText by rememberSaveable(editKey) { mutableStateOf(formatCleanDecimal(editingExpense?.amount)) }
+    var titleText by rememberSaveable(editKey) { mutableStateOf(editingExpense?.title.orEmpty()) }
+    var dateEpochMs by rememberSaveable(editKey) { mutableStateOf(editingExpense?.dateEpochMs ?: nowMs) }
     var showDatePicker by remember { mutableStateOf(false) }
-    var paymentMode by rememberSaveable { mutableStateOf("UPI") }
-    var selectedProjectId by rememberSaveable { mutableStateOf<String?>(null) }
+    var paymentMode by rememberSaveable(editKey) { mutableStateOf(editingExpense?.paymentMode ?: "UPI") }
+    var selectedProjectId by rememberSaveable(editKey) { mutableStateOf(editingExpense?.projectId) }
+    var isPrivate by rememberSaveable(editKey) { mutableStateOf(editingExpense?.isPrivate ?: false) }
 
-    val defaultVehicleId = initialVehicleId?.takeIf { id -> vehicles.any { it.id == id } }
-        ?: vehicles.firstOrNull()?.id
-    var selectedVehicleId by rememberSaveable { mutableStateOf(defaultVehicleId) }
-    val selectedVehicle = vehicles.firstOrNull { it.id == selectedVehicleId }
-    var odometerText by rememberSaveable(selectedVehicleId) {
-        mutableStateOf(selectedVehicle?.odometer?.toString().orEmpty())
+    val defaultVehicleId = if (editingExpense != null) {
+        editingExpense.vehicleId
+    } else {
+        initialVehicleId?.takeIf { id -> vehicles.any { it.id == id } }
+            ?: vehicles.firstOrNull()?.id
     }
-    var checkedServiceIds by rememberSaveable(selectedVehicleId) { mutableStateOf(setOf<String>()) }
+    var selectedVehicleId by rememberSaveable(editKey) { mutableStateOf(defaultVehicleId) }
+    val selectedVehicle = vehicles.firstOrNull { it.id == selectedVehicleId }
+    var odometerText by rememberSaveable(editKey, selectedVehicleId) {
+        mutableStateOf(
+            editingExpense?.odometerReading?.toString()
+                ?: selectedVehicle?.odometer?.toString().orEmpty()
+        )
+    }
+    var fuelOdometerText by rememberSaveable(editKey, selectedVehicleId) {
+        mutableStateOf(
+            if (editingExpense != null && editingExpense.vehicleId == selectedVehicleId) {
+                editingExpense.odometerReading?.toString().orEmpty()
+            } else ""
+        )
+    }
+    var fuelPricePerLitreText by rememberSaveable(editKey) {
+        mutableStateOf(formatCleanDecimal(editingExpense?.fuelPricePerLitre))
+    }
+    var fuelLitresText by rememberSaveable(editKey) {
+        mutableStateOf(formatCleanDecimal(editingExpense?.fuelLitres))
+    }
+    var lastAutoFuelAmount by rememberSaveable(editKey) { mutableStateOf("") }
+    var checkedServiceIds by rememberSaveable(editKey, selectedVehicleId) { mutableStateOf(setOf<String>()) }
 
-    var showItemLines by rememberSaveable { mutableStateOf(false) }
-    val draftLines = remember { mutableStateListOf<DraftLineInput>() }
+    var showItemLines by rememberSaveable(editKey) {
+        mutableStateOf(!editingExpense?.items.isNullOrEmpty())
+    }
+    val draftLines = remember(editKey) {
+        mutableStateListOf<DraftLineInput>().apply {
+            editingExpense?.items?.forEach { item ->
+                add(
+                    DraftLineInput(
+                        name = item.name,
+                        qtyText = if (item.qty % 1.0 == 0.0) item.qty.toInt().toString() else item.qty.toString(),
+                        priceText = formatCleanDecimal(item.rate)
+                    )
+                )
+            }
+        }
+    }
 
     val linesTotal = draftLines.sumOf { line ->
         val q = line.qtyText.toDoubleOrNull() ?: 0.0
@@ -193,7 +246,24 @@ fun AddExpenseScreen(
         }
     }
 
-    val isVehicleService = selectedCatId == "veh" && selectedSub.equals("Service", ignoreCase = true)
+    val isVehicleCategory = selectedCatId == "veh" && vehicles.isNotEmpty()
+    val isVehicleService = isVehicleCategory && selectedSub.equals("Service", ignoreCase = true)
+    val isVehicleFuel = isVehicleCategory && selectedSub.equals("Fuel", ignoreCase = true)
+
+    LaunchedEffect(fuelPricePerLitreText, fuelLitresText, isVehicleFuel, selectedVehicleId) {
+        if (isVehicleFuel && selectedVehicle != null && (!showItemLines || draftLines.isEmpty())) {
+            val rate = fuelPricePerLitreText.toDoubleOrNull()
+            val litres = fuelLitresText.toDoubleOrNull()
+            if (rate != null && rate > 0.0 && litres != null && litres > 0.0) {
+                val computed = rate * litres
+                val formatted = if (computed % 1.0 == 0.0) computed.toInt().toString() else "%.2f".format(computed)
+                if (amountText.isBlank() || amountText == lastAutoFuelAmount) {
+                    amountText = formatted
+                    lastAutoFuelAmount = formatted
+                }
+            }
+        }
+    }
 
     if (showDatePicker) {
         val pickerState = rememberDatePickerState(initialSelectedDateMillis = dateEpochMs)
@@ -228,16 +298,18 @@ fun AddExpenseScreen(
         ) {
             item {
                 SelavuTopNavBar(
-                    title = strings.addExpense,
+                    title = if (isEditMode) "Edit expense" else strings.addExpense,
                     onBack = onBack,
                     trailing = {
-                        SelavuFilterChip(
-                            label = strings.scanInstead,
-                            selected = true,
-                            icon = Icons.Filled.DocumentScanner,
-                            onClick = onSwitchToScan,
-                            modifier = Modifier.testTag("add_switch_to_scan")
-                        )
+                        if (!isEditMode) {
+                            SelavuFilterChip(
+                                label = strings.scanInstead,
+                                selected = true,
+                                icon = Icons.Filled.DocumentScanner,
+                                onClick = onSwitchToScan,
+                                modifier = Modifier.testTag("add_switch_to_scan")
+                            )
+                        }
                     }
                 )
             }
@@ -249,7 +321,7 @@ fun AddExpenseScreen(
                         Text(
                             text = "AMOUNT",
                             style = MaterialTheme.typography.labelSmall,
-                            color = colors.ink3
+                            color = colorScheme.outline
                         )
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -257,8 +329,8 @@ fun AddExpenseScreen(
                         ) {
                             Text(
                                 text = "₹",
-                                style = MaterialTheme.typography.displayLarge.copy(fontSize = 36.sp),
-                                color = colors.accentInk
+                                style = MaterialTheme.typography.displayLarge,
+                                color = colorScheme.onPrimaryContainer
                             )
                             OutlinedTextField(
                                 value = amountText,
@@ -270,19 +342,20 @@ fun AddExpenseScreen(
                                 placeholder = {
                                     Text(
                                         "0",
-                                        style = MaterialTheme.typography.displayLarge.copy(fontSize = 34.sp),
-                                        color = colors.ink3.copy(alpha = 0.45f)
+                                        style = MaterialTheme.typography.displayLarge,
+                                        color = colorScheme.outline.copy(alpha = 0.45f)
                                     )
                                 },
                                 textStyle = MaterialTheme.typography.displayLarge.copy(
-                                    fontSize = 34.sp,
-                                    color = colors.ink
+                                    color = colorScheme.onSurface
                                 ),
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                 singleLine = true,
+                                shape = MaterialTheme.shapes.medium,
                                 colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = colors.accent,
-                                    unfocusedBorderColor = colors.line
+                                    focusedBorderColor = colorScheme.primary,
+                                    unfocusedBorderColor = colorScheme.outlineVariant,
+                                    cursorColor = colorScheme.primary
                                 ),
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -290,13 +363,11 @@ fun AddExpenseScreen(
                             )
                         }
 
-                        OutlinedTextField(
+                        SelavuTextField(
                             value = titleText,
                             onValueChange = { titleText = it },
-                            label = { Text(strings.whatWasItFor) },
-                            placeholder = { Text("e.g. Reliance Fresh, Sri Vel Garage, TNEB") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(14.dp),
+                            label = strings.whatWasItFor,
+                            placeholder = "e.g. Reliance Fresh, Sri Vel Garage, TNEB",
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("expense_title_input")
@@ -309,17 +380,17 @@ fun AddExpenseScreen(
             item {
                 SelavuCard {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(strings.category, style = MaterialTheme.typography.labelLarge, color = colors.ink)
+                        Text(strings.category, style = MaterialTheme.typography.labelLarge, color = colorScheme.onSurface)
                         if (categories.isEmpty()) {
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text(
                                     text = "No categories yet after clearing data. Restore default Indian categories or log under General.",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = colors.ink2
+                                    color = colorScheme.onSurfaceVariant
                                 )
                                 OutlinedButton(
                                     onClick = onRestoreStarterCategories,
-                                    shape = RoundedCornerShape(12.dp),
+                                    shape = MaterialTheme.shapes.small,
                                     modifier = Modifier.testTag("add_restore_categories_button")
                                 ) {
                                     Text("Restore starter categories")
@@ -344,7 +415,7 @@ fun AddExpenseScreen(
                         val subs = selectedCategory?.subcategories.orEmpty()
                         if (subs.isNotEmpty()) {
                             Spacer(modifier = Modifier.height(2.dp))
-                            Text(strings.subCategory, style = MaterialTheme.typography.labelLarge, color = colors.ink)
+                            Text(strings.subCategory, style = MaterialTheme.typography.labelLarge, color = colorScheme.onSurface)
                             FlowRow(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -363,8 +434,8 @@ fun AddExpenseScreen(
                 }
             }
 
-            // Signature Vehicle > Service section
-            if (isVehicleService && vehicles.isNotEmpty()) {
+            // Vehicle linking for all vehicle expenses + Service tracker & Fuel optional inputs
+            if (isVehicleCategory) {
                 item {
                     SelavuCard {
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -372,11 +443,11 @@ fun AddExpenseScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Icon(Icons.Filled.Link, contentDescription = null, tint = colors.accentInk, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Filled.Link, contentDescription = null, tint = colorScheme.onPrimaryContainer, modifier = Modifier.size(18.dp))
                                 Text(
-                                    text = "Vehicle service tracker link",
+                                    text = if (isVehicleService) "Vehicle service tracker link" else "Link to vehicle",
                                     style = MaterialTheme.typography.titleMedium,
-                                    color = colors.ink
+                                    color = colorScheme.onSurface
                                 )
                             }
 
@@ -384,6 +455,15 @@ fun AddExpenseScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
+                                SelavuFilterChip(
+                                    label = "None",
+                                    selected = selectedVehicleId == null,
+                                    onClick = {
+                                        selectedVehicleId = null
+                                        checkedServiceIds = emptySet()
+                                    },
+                                    modifier = Modifier.testTag("veh_chip_none")
+                                )
                                 vehicles.forEach { v ->
                                     SelavuFilterChip(
                                         label = "${v.shortName} (${IndianFormatters.formatIndianInteger(v.odometer.toLong())} km)",
@@ -392,28 +472,27 @@ fun AddExpenseScreen(
                                             selectedVehicleId = v.id
                                             odometerText = v.odometer.toString()
                                             checkedServiceIds = emptySet()
-                                        }
+                                        },
+                                        modifier = Modifier.testTag("veh_chip_${v.id}")
                                     )
                                 }
                             }
 
-                            OutlinedTextField(
-                                value = odometerText,
-                                onValueChange = { if (it.all(Char::isDigit)) odometerText = it },
-                                label = { Text("Odometer reading now (km)") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
-                                shape = RoundedCornerShape(14.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("service_odometer_input")
-                            )
+                            if (selectedVehicle != null && isVehicleService) {
+                                SelavuTextField(
+                                    value = odometerText,
+                                    onValueChange = { if (it.all(Char::isDigit)) odometerText = it },
+                                    label = "Odometer reading now (km)",
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("service_odometer_input")
+                                )
 
-                            if (selectedVehicle != null) {
                                 Text(
                                     text = "Tap items completed today (resets next-due tracker):",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = colors.ink2
+                                    color = colorScheme.onSurfaceVariant
                                 )
                                 FlowRow(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -436,6 +515,58 @@ fun AddExpenseScreen(
                                     }
                                 }
                             }
+
+                            if (selectedVehicle != null && isVehicleFuel) {
+                                SelavuDivider()
+                                Text(
+                                    text = "Fuel & odometer details (optional)",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = colorScheme.onSurface
+                                )
+                                SelavuTextField(
+                                    value = fuelOdometerText,
+                                    onValueChange = { if (it.all(Char::isDigit)) fuelOdometerText = it },
+                                    label = "Odometer reading (km · optional)",
+                                    placeholder = "Current ${IndianFormatters.formatIndianInteger(selectedVehicle.odometer.toLong())} km",
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("fuel_odometer_input")
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    SelavuTextField(
+                                        value = fuelPricePerLitreText,
+                                        onValueChange = { input ->
+                                            if (input.isEmpty() || input.matches(Regex("^\\d*\\.?\\d{0,2}$"))) {
+                                                fuelPricePerLitreText = input
+                                            }
+                                        },
+                                        label = "Per litre ₹ (opt.)",
+                                        placeholder = "e.g. 102.50",
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("fuel_price_per_litre_input")
+                                    )
+                                    SelavuTextField(
+                                        value = fuelLitresText,
+                                        onValueChange = { input ->
+                                            if (input.isEmpty() || input.matches(Regex("^\\d*\\.?\\d{0,2}$"))) {
+                                                fuelLitresText = input
+                                            }
+                                        },
+                                        label = "Total litres (opt.)",
+                                        placeholder = "e.g. 8.5",
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("fuel_litres_input")
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -445,7 +576,7 @@ fun AddExpenseScreen(
             item {
                 SelavuCard {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(strings.date, style = MaterialTheme.typography.labelLarge, color = colors.ink)
+                        Text(strings.date, style = MaterialTheme.typography.labelLarge, color = colorScheme.onSurface)
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -471,7 +602,7 @@ fun AddExpenseScreen(
 
                         SelavuDivider()
 
-                        Text(strings.paidWith, style = MaterialTheme.typography.labelLarge, color = colors.ink)
+                        Text(strings.paidWith, style = MaterialTheme.typography.labelLarge, color = colorScheme.onSurface)
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -488,7 +619,7 @@ fun AddExpenseScreen(
 
                         if (projects.isNotEmpty()) {
                             SelavuDivider()
-                            Text("${strings.project} (optional)", style = MaterialTheme.typography.labelLarge, color = colors.ink)
+                            Text("${strings.project} (optional)", style = MaterialTheme.typography.labelLarge, color = colorScheme.onSurface)
                             FlowRow(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -528,13 +659,13 @@ fun AddExpenseScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column {
-                                Text(strings.itemLevelDetails, style = MaterialTheme.typography.labelLarge, color = colors.ink)
-                                Text("Total auto-fills from line items", style = MaterialTheme.typography.bodySmall, color = colors.ink2)
+                                Text(strings.itemLevelDetails, style = MaterialTheme.typography.labelLarge, color = colorScheme.onSurface)
+                                Text("Total auto-fills from line items", style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
                             }
                             Icon(
                                 imageVector = if (showItemLines) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                                 contentDescription = "Toggle item lines",
-                                tint = colors.ink2
+                                tint = colorScheme.onSurfaceVariant
                             )
                         }
 
@@ -545,43 +676,75 @@ fun AddExpenseScreen(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    OutlinedTextField(
+                                    SelavuTextField(
                                         value = line.name,
                                         onValueChange = { v -> draftLines[idx] = line.copy(name = v) },
-                                        label = { Text("Item") },
-                                        singleLine = true,
+                                        label = "Item",
                                         modifier = Modifier.weight(1.8f)
                                     )
-                                    OutlinedTextField(
+                                    SelavuTextField(
                                         value = line.qtyText,
                                         onValueChange = { v -> draftLines[idx] = line.copy(qtyText = v) },
-                                        label = { Text("Qty") },
+                                        label = "Qty",
                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                        singleLine = true,
                                         modifier = Modifier.weight(0.7f)
                                     )
-                                    OutlinedTextField(
+                                    SelavuTextField(
                                         value = line.priceText,
                                         onValueChange = { v -> draftLines[idx] = line.copy(priceText = v) },
-                                        label = { Text("Rate ₹") },
+                                        label = "Rate ₹",
                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                        singleLine = true,
                                         modifier = Modifier.weight(1f)
                                     )
                                     IconButton(onClick = { draftLines.removeAt(idx) }) {
-                                        Icon(Icons.Filled.DeleteOutline, contentDescription = "Remove line", tint = colors.bad)
+                                        Icon(Icons.Filled.DeleteOutline, contentDescription = "Remove line", tint = colorScheme.error)
                                     }
                                 }
                             }
                             OutlinedButton(
                                 onClick = { draftLines += DraftLineInput() },
-                                shape = RoundedCornerShape(12.dp),
+                                shape = MaterialTheme.shapes.small,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("Add item line")
                             }
+                        }
+                    }
+                }
+            }
+
+            if (inWorkspace) {
+                item {
+                    SelavuCard {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                                Text(
+                                    text = "Hide from Family Workspace",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = colorScheme.onSurface
+                                )
+                                Text(
+                                    text = if (selectedCategory?.hiddenFromWorkspace == true) {
+                                        "This entire category is already hidden from your workspace."
+                                    } else {
+                                        "Private entries stay only in your Individual account."
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = isPrivate,
+                                onCheckedChange = { isPrivate = it },
+                                colors = SwitchDefaults.colors(checkedTrackColor = colorScheme.primary),
+                                modifier = Modifier.testTag("add_expense_private_switch")
+                            )
                         }
                     }
                 }
@@ -611,18 +774,29 @@ fun AddExpenseScreen(
                         } else emptyList()
 
                         val finalTitle = titleText.trim().ifBlank {
-                            if (isVehicleService && selectedVehicle != null) {
-                                "${selectedVehicle.shortName} service"
-                            } else {
-                                selectedSub.ifBlank { selectedCategory?.name ?: "Expense" }
+                            when {
+                                isVehicleService && selectedVehicle != null -> "${selectedVehicle.shortName} service"
+                                isVehicleFuel && selectedVehicle != null -> "${selectedVehicle.shortName} fuel"
+                                else -> selectedSub.ifBlank { selectedCategory?.name ?: "Expense" }
                             }
                         }
                         val project = projects.firstOrNull { it.id == selectedProjectId }
-                        val vehicle = if (isVehicleService) selectedVehicle else null
-                        val odo = if (isVehicleService) odometerText.toIntOrNull() else null
+                        val vehicle = if (isVehicleCategory) selectedVehicle else null
+                        val odo = when {
+                            isVehicleService && vehicle != null -> odometerText.toIntOrNull()
+                            isVehicleFuel && vehicle != null -> fuelOdometerText.toIntOrNull()
+                            else -> null
+                        }
+                        val fuelRate = if (isVehicleFuel && vehicle != null) {
+                            fuelPricePerLitreText.toDoubleOrNull()?.takeIf { it > 0.0 }
+                        } else null
+                        val fuelQty = if (isVehicleFuel && vehicle != null) {
+                            fuelLitresText.toDoubleOrNull()?.takeIf { it > 0.0 }
+                        } else null
 
+                        val baseExpense = editingExpense ?: Expense()
                         onSave(
-                            Expense(
+                            baseExpense.copy(
                                 title = finalTitle,
                                 amount = amt,
                                 dateEpochMs = dateEpochMs,
@@ -631,19 +805,23 @@ fun AddExpenseScreen(
                                 paymentMode = paymentMode,
                                 projectId = project?.id,
                                 vehicleId = vehicle?.id,
-                                items = validLines.takeIf { it.isNotEmpty() }
+                                isPrivate = isPrivate,
+                                items = validLines.takeIf { it.isNotEmpty() },
+                                odometerReading = odo,
+                                fuelPricePerLitre = fuelRate,
+                                fuelLitres = fuelQty
                             ),
                             vehicle,
                             odo,
-                            checkedServiceIds.toList(),
+                            if (isVehicleService) checkedServiceIds.toList() else emptyList(),
                             project
                         )
                     },
                     enabled = !isSaving,
-                    shape = RoundedCornerShape(16.dp),
+                    shape = MaterialTheme.shapes.medium,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = colors.accent,
-                        contentColor = colors.onAccent
+                        containerColor = colorScheme.primary,
+                        contentColor = colorScheme.onPrimary
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -651,9 +829,12 @@ fun AddExpenseScreen(
                         .testTag("save_expense_button")
                 ) {
                     if (isSaving) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = colors.onAccent, strokeWidth = 2.dp)
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = colorScheme.onPrimary, strokeWidth = 2.dp)
                     } else {
-                        Text(strings.saveExpense, style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = if (isEditMode) "Save changes" else strings.saveExpense,
+                            style = MaterialTheme.typography.titleMedium
+                        )
                     }
                 }
             }
@@ -679,7 +860,8 @@ fun ScanBillScreen(
     onSaveBill: (ScannedBillDraft) -> Unit,
     onShowToast: (String) -> Unit
 ) {
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
+    val extendedColors = SelavuTheme.extendedColors
     val strings = selavuStrings()
     val context = LocalContext.current
 
@@ -730,29 +912,26 @@ fun ScanBillScreen(
 
                     // Framing Viewfinder Guide
                     item {
+                        val viewfinderFg = colorScheme.onSecondary
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(260.dp)
-                                .clip(RoundedCornerShape(24.dp))
-                                .background(colors.hero)
+                                .clip(MaterialTheme.shapes.extraLarge)
+                                .background(colorScheme.secondary)
                                 .padding(20.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            val guideColor = colors.heroFg.copy(alpha = 0.72f)
+                            val guideColor = viewfinderFg.copy(alpha = 0.72f)
                             Canvas(modifier = Modifier.fillMaxSize()) {
                                 val corner = 28.dp.toPx()
                                 val sw = 3.dp.toPx()
-                                // Top-left
                                 drawLine(guideColor, Offset(0f, 0f), Offset(corner, 0f), sw, StrokeCap.Round)
                                 drawLine(guideColor, Offset(0f, 0f), Offset(0f, corner), sw, StrokeCap.Round)
-                                // Top-right
                                 drawLine(guideColor, Offset(size.width, 0f), Offset(size.width - corner, 0f), sw, StrokeCap.Round)
                                 drawLine(guideColor, Offset(size.width, 0f), Offset(size.width, corner), sw, StrokeCap.Round)
-                                // Bottom-left
                                 drawLine(guideColor, Offset(0f, size.height), Offset(corner, size.height), sw, StrokeCap.Round)
                                 drawLine(guideColor, Offset(0f, size.height), Offset(0f, size.height - corner), sw, StrokeCap.Round)
-                                // Bottom-right
                                 drawLine(guideColor, Offset(size.width, size.height), Offset(size.width - corner, size.height), sw, StrokeCap.Round)
                                 drawLine(guideColor, Offset(size.width, size.height), Offset(size.width, size.height - corner), sw, StrokeCap.Round)
                             }
@@ -764,25 +943,25 @@ fun ScanBillScreen(
                                     modifier = Modifier
                                         .size(58.dp)
                                         .clip(CircleShape)
-                                        .background(colors.heroFg.copy(alpha = 0.14f)),
+                                        .background(viewfinderFg.copy(alpha = 0.14f)),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         imageVector = Icons.Filled.AutoAwesome,
                                         contentDescription = "AI Bill Scan",
-                                        tint = colors.heroFg,
+                                        tint = viewfinderFg,
                                         modifier = Modifier.size(28.dp)
                                     )
                                 }
                                 Text(
                                     text = "Frame any Indian receipt or GST bill",
                                     style = MaterialTheme.typography.titleMedium,
-                                    color = colors.heroFg
+                                    color = viewfinderFg
                                 )
                                 Text(
                                     text = "Shop receipts · GST invoices · EB & water bills · Handwritten bills",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = colors.heroFg.copy(alpha = 0.78f)
+                                    color = viewfinderFg.copy(alpha = 0.78f)
                                 )
                             }
                         }
@@ -839,20 +1018,20 @@ fun ScanBillScreen(
                                     Text(
                                         text = "No paper receipt handy?",
                                         style = MaterialTheme.typography.titleMedium,
-                                        color = colors.ink
+                                        color = colorScheme.onSurface
                                     )
                                 }
                                 Text(
                                     text = "Generate a realistic Sri Vel Two-Wheeler Care GST invoice with handwritten alignment lines & chain kit sub-items, and run live Gemini multimodal extraction.",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = colors.ink2
+                                    color = colorScheme.onSurfaceVariant
                                 )
                                 Button(
                                     onClick = onScanSample,
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = MaterialTheme.shapes.medium,
                                     colors = ButtonDefaults.buttonColors(
-                                        containerColor = colors.accent,
-                                        contentColor = colors.onAccent
+                                        containerColor = colorScheme.primary,
+                                        contentColor = colorScheme.onPrimary
                                     ),
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -885,7 +1064,7 @@ fun ScanBillScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     CircularProgressIndicator(
-                        color = colors.accent,
+                        color = colorScheme.primary,
                         strokeWidth = 4.dp,
                         modifier = Modifier.size(56.dp)
                     )
@@ -893,7 +1072,7 @@ fun ScanBillScreen(
                     Text(
                         text = strings.readingBill,
                         style = MaterialTheme.typography.headlineMedium,
-                        color = colors.ink
+                        color = colorScheme.onBackground
                     )
                     Spacer(modifier = Modifier.height(20.dp))
                     SelavuCard {
@@ -907,18 +1086,18 @@ fun ScanBillScreen(
                                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
                                     if (done) {
-                                        Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = colors.ok, modifier = Modifier.size(20.dp))
+                                        Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = extendedColors.ok, modifier = Modifier.size(20.dp))
                                     } else if (active) {
-                                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = colors.accent)
+                                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = colorScheme.primary)
                                     } else {
-                                        Box(modifier = Modifier.size(18.dp).clip(CircleShape).border(1.5.dp, colors.line, CircleShape))
+                                        Box(modifier = Modifier.size(18.dp).clip(CircleShape).border(1.5.dp, colorScheme.outlineVariant, CircleShape))
                                     }
                                     Text(
                                         text = label,
                                         style = MaterialTheme.typography.bodyMedium.copy(
                                             fontWeight = if (done || active) FontWeight.Bold else FontWeight.Normal
                                         ),
-                                        color = if (done || active) colors.ink else colors.ink3
+                                        color = if (done || active) colorScheme.onSurface else colorScheme.outline
                                     )
                                 }
                             }
@@ -939,14 +1118,14 @@ fun ScanBillScreen(
                     SelavuCard {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.Warning, contentDescription = null, tint = colors.bad)
-                                Text("Could not extract bill", style = MaterialTheme.typography.titleMedium, color = colors.bad)
+                                Icon(Icons.Filled.Warning, contentDescription = null, tint = colorScheme.error)
+                                Text("Could not extract bill", style = MaterialTheme.typography.titleMedium, color = colorScheme.error)
                             }
-                            Text(scanState.message, style = MaterialTheme.typography.bodyMedium, color = colors.ink2)
+                            Text(scanState.message, style = MaterialTheme.typography.bodyMedium, color = colorScheme.onSurfaceVariant)
                             Button(
                                 onClick = onResetScan,
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = colors.accent, contentColor = colors.onAccent),
+                                shape = MaterialTheme.shapes.small,
+                                colors = ButtonDefaults.buttonColors(containerColor = colorScheme.primary, contentColor = colorScheme.onPrimary),
                                 modifier = Modifier.fillMaxWidth().height(48.dp)
                             ) {
                                 Text("Try another photo or sample")
@@ -991,33 +1170,30 @@ fun ScanBillScreen(
                     item {
                         SelavuCard {
                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                OutlinedTextField(
+                                SelavuTextField(
                                     value = draft.merchant,
                                     onValueChange = { v -> onUpdateDraft { it.copy(merchant = v) } },
-                                    label = { Text("Merchant / workshop") },
-                                    singleLine = true,
+                                    label = "Merchant / workshop",
                                     modifier = Modifier.fillMaxWidth()
                                 )
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedTextField(
+                                    SelavuTextField(
                                         value = draft.gstin,
                                         onValueChange = { v -> onUpdateDraft { it.copy(gstin = v.uppercase()) } },
-                                        label = { Text("GSTIN") },
-                                        singleLine = true,
+                                        label = "GSTIN",
                                         modifier = Modifier.weight(1.2f)
                                     )
-                                    OutlinedTextField(
+                                    SelavuTextField(
                                         value = draft.billNumber,
                                         onValueChange = { v -> onUpdateDraft { it.copy(billNumber = v) } },
-                                        label = { Text("Bill no.") },
-                                        singleLine = true,
+                                        label = "Bill no.",
                                         modifier = Modifier.weight(1f)
                                     )
                                 }
                                 Text(
                                     text = "Bill date: ${IndianFormatters.formatDate(draft.dateEpochMs)}",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = colors.ink2
+                                    color = colorScheme.onSurfaceVariant
                                 )
                             }
                         }
@@ -1027,7 +1203,7 @@ fun ScanBillScreen(
                     item {
                         SelavuCard {
                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Text(strings.category, style = MaterialTheme.typography.labelLarge, color = colors.ink)
+                                Text(strings.category, style = MaterialTheme.typography.labelLarge, color = colorScheme.onSurface)
                                 FlowRow(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1050,7 +1226,7 @@ fun ScanBillScreen(
 
                                 if (draft.suggestedCategoryId == "veh" && vehicles.isNotEmpty()) {
                                     SelavuDivider()
-                                    Text("Linked vehicle", style = MaterialTheme.typography.labelLarge, color = colors.ink)
+                                    Text("Linked vehicle", style = MaterialTheme.typography.labelLarge, color = colorScheme.onSurface)
                                     FlowRow(
                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                                         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1075,23 +1251,23 @@ fun ScanBillScreen(
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .clip(RoundedCornerShape(12.dp))
-                                                .background(colors.okSoft)
+                                                .clip(MaterialTheme.shapes.small)
+                                                .background(extendedColors.okSoft)
                                                 .padding(12.dp),
                                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                                             verticalAlignment = Alignment.Top
                                         ) {
-                                            Icon(Icons.Filled.Link, contentDescription = null, tint = colors.ok, modifier = Modifier.size(18.dp))
+                                            Icon(Icons.Filled.Link, contentDescription = null, tint = extendedColors.ok, modifier = Modifier.size(18.dp))
                                             Column {
                                                 Text(
                                                     text = "${linkedServiceItems.size} tracker item${if (linkedServiceItems.size > 1) "s" else ""} will reset on save",
                                                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                                    color = colors.ok
+                                                    color = extendedColors.ok
                                                 )
                                                 Text(
                                                     text = "${linkedServiceItems.joinToString(", ") { it.name }} · $nextPreview",
                                                     style = MaterialTheme.typography.bodySmall,
-                                                    color = colors.ink2
+                                                    color = colorScheme.onSurfaceVariant
                                                 )
                                             }
                                         }
@@ -1110,15 +1286,15 @@ fun ScanBillScreen(
                         ) {
                             Text(
                                 text = "Extracted items (${draft.items.size})",
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
-                                color = colors.ink
+                                style = SelavuTheme.textStyles.sectionTitle,
+                                color = colorScheme.onBackground
                             )
                             Text(
                                 text = "+ Add line",
                                 style = MaterialTheme.typography.labelLarge,
-                                color = colors.accentInk,
+                                color = colorScheme.onPrimaryContainer,
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
+                                    .clip(MaterialTheme.shapes.extraSmall)
                                     .clickable {
                                         val nextId = (draft.items.maxOfOrNull { it.id } ?: 0) + 1
                                         val newItem = ScannedBillItem(
@@ -1149,27 +1325,27 @@ fun ScanBillScreen(
                                         Text(
                                             text = item.name,
                                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                            color = colors.ink
+                                            color = colorScheme.onSurface
                                         )
                                         val hsnPart = if (item.hsn.isNotBlank()) "HSN ${item.hsn} · " else ""
                                         Text(
                                             text = "${item.qty} ${item.unit} × ${IndianFormatters.formatInr(item.rate)} · ${hsnPart}GST ${item.gstRate.toInt()}%",
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = colors.ink2
+                                            color = colorScheme.onSurfaceVariant
                                         )
                                     }
                                     Column(horizontalAlignment = Alignment.End) {
                                         Text(
                                             text = IndianFormatters.formatInr(item.taxableAmount, decimals = 2),
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold),
-                                            color = colors.ink
+                                            style = SelavuTheme.textStyles.numericBody,
+                                            color = colorScheme.onSurface
                                         )
                                         Row {
                                             IconButton(onClick = { onEditItem(item) }, modifier = Modifier.size(32.dp)) {
-                                                Icon(Icons.Filled.Edit, contentDescription = "Edit line", tint = colors.ink3, modifier = Modifier.size(16.dp))
+                                                Icon(Icons.Filled.Edit, contentDescription = "Edit line", tint = colorScheme.outline, modifier = Modifier.size(16.dp))
                                             }
                                             IconButton(onClick = { onDeleteItem(item.id) }, modifier = Modifier.size(32.dp)) {
-                                                Icon(Icons.Filled.DeleteOutline, contentDescription = "Delete line", tint = colors.bad, modifier = Modifier.size(16.dp))
+                                                Icon(Icons.Filled.DeleteOutline, contentDescription = "Delete line", tint = colorScheme.error, modifier = Modifier.size(16.dp))
                                             }
                                         }
                                     }
@@ -1179,8 +1355,8 @@ fun ScanBillScreen(
                                     Column(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .background(colors.sunk)
+                                            .clip(MaterialTheme.shapes.small)
+                                            .background(colorScheme.surfaceVariant)
                                             .padding(10.dp),
                                         verticalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
@@ -1189,8 +1365,8 @@ fun ScanBillScreen(
                                                 modifier = Modifier.fillMaxWidth(),
                                                 horizontalArrangement = Arrangement.SpaceBetween
                                             ) {
-                                                Text("↳ ${sub.name} (${sub.qty.toInt()}x)", style = MaterialTheme.typography.bodySmall, color = colors.ink2)
-                                                Text(IndianFormatters.formatInr(sub.lineAmount), style = MaterialTheme.typography.bodySmall, color = colors.ink)
+                                                Text("↳ ${sub.name} (${sub.qty.toInt()}x)", style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
+                                                Text(IndianFormatters.formatInr(sub.lineAmount), style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurface)
                                             }
                                         }
                                     }
@@ -1200,17 +1376,17 @@ fun ScanBillScreen(
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .background(colors.warnSoft)
+                                            .clip(MaterialTheme.shapes.small)
+                                            .background(extendedColors.warnSoft)
                                             .padding(8.dp),
                                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Icon(Icons.Filled.Warning, contentDescription = null, tint = colors.warn, modifier = Modifier.size(16.dp))
+                                        Icon(Icons.Filled.Warning, contentDescription = null, tint = extendedColors.warn, modifier = Modifier.size(16.dp))
                                         Text(
                                             text = "Check: ${item.lowConfidenceNote}",
                                             style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                                            color = colors.warn
+                                            color = extendedColors.warn
                                         )
                                     }
                                 }
@@ -1227,11 +1403,11 @@ fun ScanBillScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("Tax breakdown (IGST inter-state)", style = MaterialTheme.typography.bodyMedium, color = colors.ink2)
+                                    Text("Tax breakdown (IGST inter-state)", style = MaterialTheme.typography.bodyMedium, color = colorScheme.onSurfaceVariant)
                                     Switch(
                                         checked = draft.isInterStateIgst,
                                         onCheckedChange = { v -> onUpdateDraft { it.copy(isInterStateIgst = v) } },
-                                        colors = SwitchDefaults.colors(checkedTrackColor = colors.accent)
+                                        colors = SwitchDefaults.colors(checkedTrackColor = colorScheme.primary)
                                     )
                                 }
                                 SummaryRow("Taxable value", IndianFormatters.formatInr(draft.taxableTotal, 2))
@@ -1249,11 +1425,11 @@ fun ScanBillScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("Grand total", style = MaterialTheme.typography.titleMedium, color = colors.ink)
+                                    Text("Grand total", style = MaterialTheme.typography.titleMedium, color = colorScheme.onSurface)
                                     Text(
                                         text = IndianFormatters.formatInr(draft.grandTotal),
                                         style = MaterialTheme.typography.headlineMedium,
-                                        color = colors.accentInk
+                                        color = colorScheme.onPrimaryContainer
                                     )
                                 }
 
@@ -1265,13 +1441,13 @@ fun ScanBillScreen(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(strings.keepItemLevel, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = colors.ink)
-                                        Text("Searchable items, HSN & GST splits", style = MaterialTheme.typography.bodySmall, color = colors.ink2)
+                                        Text(strings.keepItemLevel, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), color = colorScheme.onSurface)
+                                        Text("Searchable items, HSN & GST splits", style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
                                     }
                                     Switch(
                                         checked = draft.keepItemLevel,
                                         onCheckedChange = { v -> onUpdateDraft { it.copy(keepItemLevel = v) } },
-                                        colors = SwitchDefaults.colors(checkedTrackColor = colors.accent)
+                                        colors = SwitchDefaults.colors(checkedTrackColor = colorScheme.primary)
                                     )
                                 }
                             }
@@ -1283,10 +1459,10 @@ fun ScanBillScreen(
                         Button(
                             onClick = { onSaveBill(draft) },
                             enabled = !isSaving && draft.items.isNotEmpty(),
-                            shape = RoundedCornerShape(16.dp),
+                            shape = MaterialTheme.shapes.medium,
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = colors.accent,
-                                contentColor = colors.onAccent
+                                containerColor = colorScheme.primary,
+                                contentColor = colorScheme.onPrimary
                             ),
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1294,7 +1470,7 @@ fun ScanBillScreen(
                                 .testTag("save_scanned_bill_button")
                         ) {
                             if (isSaving) {
-                                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = colors.onAccent, strokeWidth = 2.dp)
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = colorScheme.onPrimary, strokeWidth = 2.dp)
                             } else {
                                 Text("${strings.saveBill} · ${IndianFormatters.formatInr(draft.grandTotal)}", style = MaterialTheme.typography.titleMedium)
                             }
@@ -1308,27 +1484,27 @@ fun ScanBillScreen(
 
 @Composable
 private fun CaptureOptionTile(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(colors.surface)
-            .border(1.dp, colors.line, RoundedCornerShape(16.dp))
+            .clip(MaterialTheme.shapes.medium)
+            .background(colorScheme.surface)
+            .border(1.dp, colorScheme.outlineVariant, MaterialTheme.shapes.medium)
             .clickable(onClick = onClick)
             .padding(vertical = 16.dp, horizontal = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Icon(icon, contentDescription = label, tint = colors.accentInk, modifier = Modifier.size(24.dp))
+        Icon(icon, contentDescription = label, tint = colorScheme.onPrimaryContainer, modifier = Modifier.size(24.dp))
         Text(
             text = label,
             style = MaterialTheme.typography.labelLarge,
-            color = colors.ink,
+            color = colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -1337,19 +1513,16 @@ private fun CaptureOptionTile(
 
 @Composable
 private fun SummaryRow(label: String, value: String) {
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(label, style = MaterialTheme.typography.bodySmall, color = colors.ink2)
+        Text(label, style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
         Text(
             text = value,
-            style = MaterialTheme.typography.bodySmall.copy(
-                fontWeight = FontWeight.Bold,
-                fontFeatureSettings = "tnum"
-            ),
-            color = colors.ink
+            style = SelavuTheme.textStyles.numericCaption,
+            color = colorScheme.onSurface
         )
     }
 }

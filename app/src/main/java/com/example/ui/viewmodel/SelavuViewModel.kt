@@ -10,25 +10,39 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.R
 import com.example.data.ai.BillScannerService
+import com.example.data.firebase.RetainedWorkspaceBundle
 import com.example.data.firebase.SelavuRepository
 import com.example.data.firebase.deleteAccountCompletely
-import com.example.data.firebase.sendPasswordResetEmail
 import com.example.data.firebase.updateAuthDisplayName
 import com.example.data.model.AttentionAlert
 import com.example.data.model.Bill
 import com.example.data.model.Category
 import com.example.data.model.Expense
+import com.example.data.model.ExpenseItem
 import com.example.data.model.Project
+import com.example.data.model.ProjectPaymentItem
+import com.example.data.model.ProjectProduct
 import com.example.data.model.ScannedBillDraft
 import com.example.data.model.ScannedBillItem
 import com.example.data.model.ServiceItem
 import com.example.data.model.ServiceStatus
+import com.example.data.model.SharedBill
+import com.example.data.model.SharedCategory
+import com.example.data.model.SharedExpense
+import com.example.data.model.SharedProject
+import com.example.data.model.SharedProjectContribution
+import com.example.data.model.SharedVehicle
 import com.example.data.model.UserProfile
 import com.example.data.model.Vehicle
+import com.example.data.model.Workspace
+import com.example.data.notifications.ReviewDraft
+import com.example.data.notifications.ReviewDraftStore
+import com.example.data.notifications.SmsExpenseReader
 import com.example.util.IndianFormatters
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -36,8 +50,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 sealed interface ScanUiState {
     data object Capture : ScanUiState
@@ -51,17 +71,70 @@ sealed interface AppDataState {
     data class Ready(
         val profile: UserProfile,
         val categories: List<Category>,
+        val effectiveCategories: List<Category> = categories,
+        val sharedCategoryOwners: Map<String, String> = emptyMap(),
         val expenses: List<Expense>,
         val vehicles: List<Vehicle>,
         val bills: List<Bill>,
-        val projects: List<Project>
-    ) : AppDataState
+        val projects: List<Project>,
+        val workspace: Workspace? = null,
+        val sharedExpenses: List<SharedExpense> = emptyList(),
+        val sharedVehicles: List<SharedVehicle> = emptyList(),
+        val sharedProjects: List<SharedProject> = emptyList(),
+        val sharedProjectContributions: List<SharedProjectContribution> = emptyList(),
+        val sharedBills: List<SharedBill> = emptyList(),
+        val sharedCategories: List<SharedCategory> = emptyList(),
+        val retainedVehicles: List<SharedVehicle> = emptyList(),
+        val retainedProjects: List<SharedProject> = emptyList(),
+        val retainedExpenses: List<SharedExpense> = emptyList(),
+        val retainedProjectContributions: List<SharedProjectContribution> = emptyList()
+    ) : AppDataState {
+        val pickerVehicles: List<Vehicle>
+            get() = vehicles + sharedVehicles.filter { it.ownerUid != profile.userId }.map { it.toVehicle() }
+
+        val pickerProjects: List<Project>
+            get() = projects + sharedProjects.filter { it.ownerUid != profile.userId }.map { it.toProject() }
+
+        val retainedVehicleIds: Set<String>
+            get() = retainedVehicles.mapTo(HashSet()) { it.id }
+
+        val retainedProjectIds: Set<String>
+            get() = retainedProjects.mapTo(HashSet()) { it.id }
+
+        fun isRetainedExpense(expense: Expense): Boolean =
+            (expense.vehicleId != null && expense.vehicleId in retainedVehicleIds) ||
+                (expense.projectId != null && expense.projectId in retainedProjectIds)
+    }
     data class Error(val message: String) : AppDataState
 }
+
+private data class PersonalBundle(
+    val profile: UserProfile?,
+    val categories: List<Category>,
+    val expenses: List<Expense>,
+    val vehicles: List<Vehicle>,
+    val bills: List<Bill>
+)
+
+private data class ProjectsAndWsBundle(
+    val projects: List<Project>,
+    val workspace: Workspace?,
+    val sharedExpenses: List<SharedExpense>,
+    val sharedVehicles: List<SharedVehicle>,
+    val sharedProjects: List<SharedProject>
+)
+
+private data class ExtraSharedBundle(
+    val sharedProjectContributions: List<SharedProjectContribution>,
+    val sharedBills: List<SharedBill>,
+    val sharedCategories: List<SharedCategory>,
+    val retained: RetainedWorkspaceBundle
+)
 
 class SelavuViewModel(
     private val repository: SelavuRepository,
     private val scannerService: BillScannerService,
+    private val draftStore: ReviewDraftStore,
     private val currentUserId: String,
     private val displayName: String?
 ) : ViewModel() {
@@ -75,27 +148,145 @@ class SelavuViewModel(
     private val _isSaving = MutableStateFlow(false)
     val isSaving: StateFlow<Boolean> = _isSaving.asStateFlow()
 
-    val appState: StateFlow<AppDataState> = combine(
-        repository.observeProfile(currentUserId),
+    private val syncMutex = Mutex()
+
+    val reviewDrafts: StateFlow<List<ReviewDraft>> = draftStore.observeDrafts(currentUserId)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000L),
+            initialValue = emptyList()
+        )
+
+    val smsAutoReadEnabled: StateFlow<Boolean> = draftStore.observeSmsEnabled(currentUserId)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000L),
+            initialValue = false
+        )
+
+    val smsSinceEpochMs: StateFlow<Long> = draftStore.observeSmsSinceEpochMs(currentUserId)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000L),
+            initialValue = ReviewDraftStore.startOfTodayEpochMs()
+        )
+
+    val disclosureAccepted: StateFlow<Boolean> = draftStore.observeDisclosureAccepted(currentUserId)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000L),
+            initialValue = false
+        )
+
+    private val profileFlow = repository.observeProfile(currentUserId)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val workspaceFlow = profileFlow
+        .map { it?.workspaceId }
+        .distinctUntilChanged()
+        .flatMapLatest { wsId -> repository.observeWorkspace(wsId) }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val activeWsIdFlow = combine(profileFlow, workspaceFlow) { profile, ws ->
+        val wsId = profile?.workspaceId
+        if (wsId != null && ws != null && currentUserId in ws.memberIds) wsId else null
+    }.distinctUntilChanged()
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val sharedExpensesFlow = activeWsIdFlow
+        .flatMapLatest { wsId -> repository.observeSharedExpenses(wsId, currentUserId) }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val sharedVehiclesFlow = activeWsIdFlow
+        .flatMapLatest { wsId -> repository.observeSharedVehicles(wsId, currentUserId) }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val sharedProjectsFlow = activeWsIdFlow
+        .flatMapLatest { wsId -> repository.observeSharedProjects(wsId, currentUserId) }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val sharedProjectContributionsFlow = activeWsIdFlow
+        .flatMapLatest { wsId -> repository.observeSharedProjectContributions(wsId, currentUserId) }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val sharedBillsFlow = activeWsIdFlow
+        .flatMapLatest { wsId -> repository.observeSharedBills(wsId, currentUserId) }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val sharedCategoriesFlow = activeWsIdFlow
+        .flatMapLatest { wsId -> repository.observeSharedCategories(wsId, currentUserId) }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val retainedBundleFlow = combine(profileFlow, activeWsIdFlow) { profile, activeWsId ->
+        (profile?.contributedWorkspaceIds ?: emptyList()) to activeWsId
+    }.distinctUntilChanged()
+        .flatMapLatest { (contributedIds, activeWsId) ->
+            repository.observeRetainedWorkspaceBundle(currentUserId, contributedIds, activeWsId)
+        }
+
+    private val personalBundleFlow = combine(
+        profileFlow,
         repository.observeCategories(currentUserId),
         repository.observeExpenses(currentUserId),
         repository.observeVehicles(currentUserId),
-        repository.observeBills(currentUserId),
-        repository.observeProjects(currentUserId)
-    ) { values ->
-        @Suppress("UNCHECKED_CAST")
-        val profile = (values[0] as? UserProfile) ?: UserProfile(id = currentUserId, userId = currentUserId)
-        @Suppress("UNCHECKED_CAST")
-        val categories = values[1] as List<Category>
-        @Suppress("UNCHECKED_CAST")
-        val expenses = values[2] as List<Expense>
-        @Suppress("UNCHECKED_CAST")
-        val vehicles = values[3] as List<Vehicle>
-        @Suppress("UNCHECKED_CAST")
-        val bills = values[4] as List<Bill>
-        @Suppress("UNCHECKED_CAST")
-        val projects = values[5] as List<Project>
-        AppDataState.Ready(profile, categories, expenses, vehicles, bills, projects) as AppDataState
+        repository.observeBills(currentUserId)
+    ) { profile, cats, exps, vehs, bills ->
+        PersonalBundle(profile, cats, exps, vehs, bills)
+    }
+
+    private val projectsAndWsBundleFlow = combine(
+        repository.observeProjects(currentUserId),
+        workspaceFlow,
+        sharedExpensesFlow,
+        sharedVehiclesFlow,
+        sharedProjectsFlow
+    ) { projects, workspace, shExps, shVehs, shProjs ->
+        ProjectsAndWsBundle(projects, workspace, shExps, shVehs, shProjs)
+    }
+
+    private val extraSharedBundleFlow = combine(
+        sharedProjectContributionsFlow,
+        sharedBillsFlow,
+        sharedCategoriesFlow,
+        retainedBundleFlow
+    ) { contribs, shBills, shCats, retained ->
+        ExtraSharedBundle(contribs, shBills, shCats, retained)
+    }
+
+    val appState: StateFlow<AppDataState> = combine(
+        personalBundleFlow,
+        projectsAndWsBundleFlow,
+        extraSharedBundleFlow
+    ) { personal, pws, extra ->
+        val profile = personal.profile ?: UserProfile(id = currentUserId, userId = currentUserId)
+        val (effectiveCats, sharedCatOwners) = mergeEffectiveCategories(
+            ownCategories = personal.categories,
+            sharedCategories = extra.sharedCategories,
+            currentUid = currentUserId
+        )
+        val activeVehIds = (personal.vehicles.map { "${currentUserId}_${it.id}" } + pws.sharedVehicles.map { it.id }).toSet()
+        val activeProjIds = (pws.projects.map { "${currentUserId}_${it.id}" } + pws.sharedProjects.map { it.id }).toSet()
+        AppDataState.Ready(
+            profile = profile,
+            categories = personal.categories,
+            effectiveCategories = effectiveCats,
+            sharedCategoryOwners = sharedCatOwners,
+            expenses = personal.expenses,
+            vehicles = personal.vehicles,
+            bills = personal.bills,
+            projects = pws.projects,
+            workspace = pws.workspace,
+            sharedExpenses = pws.sharedExpenses,
+            sharedVehicles = pws.sharedVehicles,
+            sharedProjects = pws.sharedProjects,
+            sharedProjectContributions = extra.sharedProjectContributions,
+            sharedBills = extra.sharedBills,
+            sharedCategories = extra.sharedCategories,
+            retainedVehicles = extra.retained.vehicles.filter { it.id !in activeVehIds },
+            retainedProjects = extra.retained.projects.filter { it.id !in activeProjIds },
+            retainedExpenses = extra.retained.expenses,
+            retainedProjectContributions = extra.retained.projectContributions
+        ) as AppDataState
     }.catch { error ->
         val firestoreError = generateSequence(error) { it.cause }
             .filterIsInstance<FirebaseFirestoreException>()
@@ -112,6 +303,10 @@ class SelavuViewModel(
 
     init {
         viewModelScope.launch {
+            draftStore.setActiveUser(currentUserId)
+            draftStore.ensureSmsSinceEpochMs(currentUserId)
+        }
+        viewModelScope.launch {
             try {
                 repository.ensureSampleDataSeeded(currentUserId, displayName)
             } catch (e: CancellationException) {
@@ -121,6 +316,82 @@ class SelavuViewModel(
                 showToast(e.localizedMessage ?: "Failed to initialize data.")
             }
         }
+        viewModelScope.launch {
+            @Suppress("OPT_IN_USAGE")
+            appState
+                .debounce(250L)
+                .collect { state ->
+                    if (state is AppDataState.Ready) {
+                        val wsId = state.profile.workspaceId
+                        val ws = state.workspace
+                        if (wsId != null && ws != null && currentUserId in ws.memberIds) {
+                            syncMutex.withLock {
+                                try {
+                                    val ownerName = state.profile.displayName?.takeIf { it.isNotBlank() }
+                                        ?: displayName?.takeIf { it.isNotBlank() }
+                                        ?: "Member"
+                                    val myShared = state.sharedExpenses.filter { it.ownerUid == currentUserId }
+                                    val myContribs = state.sharedProjectContributions.filter { it.ownerUid == currentUserId }
+                                    repository.syncMyWorkspaceShares(
+                                        uid = currentUserId,
+                                        ownerName = ownerName,
+                                        workspace = ws,
+                                        categories = state.categories,
+                                        expenses = state.expenses,
+                                        vehicles = state.vehicles,
+                                        bills = state.bills,
+                                        projects = state.projects,
+                                        existingSharedByMe = myShared,
+                                        existingSharedVehicles = state.sharedVehicles,
+                                        existingSharedProjects = state.sharedProjects,
+                                        existingSharedBills = state.sharedBills,
+                                        existingSharedCategories = state.sharedCategories,
+                                        existingMyContributions = myContribs
+                                    )
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Workspace share sync skipped: ${e.message}")
+                                }
+                            }
+                        } else if (wsId != null && ws != null && currentUserId !in ws.memberIds) {
+                            try {
+                                repository.clearUserWorkspaceId(currentUserId)
+                                showToast("You were removed from ${ws.name}")
+                            } catch (_: Exception) {
+                            }
+                        }
+                    }
+                }
+        }
+    }
+
+    private fun mergeEffectiveCategories(
+        ownCategories: List<Category>,
+        sharedCategories: List<SharedCategory>,
+        currentUid: String
+    ): Pair<List<Category>, Map<String, String>> {
+        val merged = ownCategories.map { it.copy() }.toMutableList()
+        val ownersMap = mutableMapOf<String, String>()
+        val others = sharedCategories.filter { it.ownerUid != currentUid }
+        for (sc in others) {
+            val idx = merged.indexOfFirst {
+                it.id == sc.sourceCategoryId || it.name.equals(sc.name, ignoreCase = true)
+            }
+            if (idx >= 0) {
+                val existing = merged[idx]
+                val combinedSubs = (existing.subcategories + sc.subcategories)
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .distinctBy { it.lowercase() }
+                merged[idx] = existing.copy(subcategories = combinedSubs)
+            } else {
+                val virtual = sc.toCategory()
+                merged += virtual
+                ownersMap[virtual.id] = sc.ownerName
+            }
+        }
+        return merged.sortedBy { it.sortOrder } to ownersMap
     }
 
     fun showToast(message: String) {
@@ -178,17 +449,6 @@ class SelavuViewModel(
         }
     }
 
-    fun sendPasswordReset(email: String) {
-        viewModelScope.launch {
-            val res = sendPasswordResetEmail(email)
-            if (res.isSuccess) {
-                showToast("Password reset email sent to ${email.trim()}")
-            } else {
-                showToast(res.exceptionOrNull()?.localizedMessage ?: "Could not send password reset email")
-            }
-        }
-    }
-
     fun restoreStarterCategories() {
         viewModelScope.launch {
             try {
@@ -222,7 +482,7 @@ class SelavuViewModel(
         viewModelScope.launch {
             _isSaving.value = true
             try {
-                val res = deleteAccountCompletely(credentialManager, repository)
+                val res = deleteAccountCompletely(credentialManager, repository, draftStore)
                 if (res.isSuccess) {
                     onDeleted()
                 } else {
@@ -232,6 +492,341 @@ class SelavuViewModel(
                 throw e
             } finally {
                 _isSaving.value = false
+            }
+        }
+    }
+
+    // --- Read SMS (Today Onwards) & Device-Local Review Queue ---
+
+    fun acceptSmsDisclosureAndEnable(context: Context) {
+        viewModelScope.launch {
+            val sinceMs = draftStore.ensureSmsSinceEpochMs(currentUserId)
+            draftStore.setSmsEnabled(
+                uid = currentUserId,
+                enabled = true,
+                acceptedDisclosure = true,
+                sinceEpochMs = sinceMs
+            )
+            if (SmsExpenseReader.hasReadSmsPermission(context)) {
+                val added = SmsExpenseReader.syncInboxSince(context, currentUserId, sinceMs, draftStore)
+                showToast(
+                    if (added > 0) "SMS reader enabled · $added expense alerts queued from today"
+                    else "SMS auto-detect enabled from today onwards (OTPs ignored)"
+                )
+            } else {
+                showToast("SMS auto-detect enabled from today onwards (OTPs ignored)")
+            }
+        }
+    }
+
+    fun setSmsAutoReadEnabled(enabled: Boolean, context: Context) {
+        viewModelScope.launch {
+            val sinceMs = draftStore.ensureSmsSinceEpochMs(currentUserId)
+            draftStore.setSmsEnabled(currentUserId, enabled = enabled, sinceEpochMs = sinceMs)
+            if (enabled) {
+                if (SmsExpenseReader.hasReadSmsPermission(context)) {
+                    val added = SmsExpenseReader.syncInboxSince(context, currentUserId, sinceMs, draftStore)
+                    showToast(
+                        if (added > 0) "SMS reader ON · $added alerts found today"
+                        else "SMS reader turned ON (today onwards · OTPs ignored)"
+                    )
+                } else {
+                    showToast("SMS reader turned ON (grant READ_SMS permission to scan)")
+                }
+            } else {
+                showToast("SMS expense reader paused")
+            }
+        }
+    }
+
+    fun syncTodaySms(context: Context, userTriggered: Boolean = false) {
+        if (!SmsExpenseReader.hasReadSmsPermission(context)) {
+            if (userTriggered) showToast("Grant SMS permission first to read today's expense alerts")
+            return
+        }
+        viewModelScope.launch {
+            val sinceMs = draftStore.ensureSmsSinceEpochMs(currentUserId)
+            val added = SmsExpenseReader.syncInboxSince(context, currentUserId, sinceMs, draftStore)
+            if (added > 0) {
+                showToast("Queued $added new expense alert${if (added > 1) "s" else ""} from SMS")
+            } else if (userTriggered) {
+                showToast("No new expense SMS messages since ${IndianFormatters.formatDate(sinceMs)}")
+            }
+        }
+    }
+
+    fun updateReviewDraft(draft: ReviewDraft) {
+        viewModelScope.launch {
+            draftStore.updateDraft(currentUserId, draft)
+        }
+    }
+
+    fun deleteReviewDraft(draftId: String) {
+        viewModelScope.launch {
+            draftStore.removeDraft(currentUserId, draftId)
+            showToast("Draft discarded")
+        }
+    }
+
+    fun approveReviewDraft(draft: ReviewDraft, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            _isSaving.value = true
+            try {
+                val ready = appState.value as? AppDataState.Ready
+                val selectedVehicle = draft.vehicleId?.let { id ->
+                    ready?.pickerVehicles?.firstOrNull { it.id == id }
+                }
+                val selectedProject = draft.projectId?.let { id ->
+                    ready?.pickerProjects?.firstOrNull { it.id == id }
+                }
+                val isVehFuelOrService = draft.categoryId == "veh" && (
+                    draft.subcategory.equals("Fuel", ignoreCase = true) ||
+                        draft.subcategory.equals("Service", ignoreCase = true)
+                    )
+                val odo = if (selectedVehicle != null && isVehFuelOrService) draft.odometerReading else null
+                val fuelRate = if (selectedVehicle != null && draft.categoryId == "veh" && draft.subcategory.equals("Fuel", ignoreCase = true)) {
+                    draft.fuelPricePerLitre
+                } else null
+                val fuelQty = if (selectedVehicle != null && draft.categoryId == "veh" && draft.subcategory.equals("Fuel", ignoreCase = true)) {
+                    draft.fuelLitres
+                } else null
+
+                val items = draft.items
+                    .filter { it.name.isNotBlank() }
+                    .map { item ->
+                        ExpenseItem(
+                            name = item.name.trim(),
+                            qty = item.qty,
+                            unit = "pcs",
+                            rate = item.rate,
+                            amount = item.amount
+                        )
+                    }
+                    .takeIf { it.isNotEmpty() }
+                val expense = Expense(
+                    title = draft.title.trim().ifBlank { "Notification expense" },
+                    amount = draft.amount.coerceAtLeast(0.01),
+                    dateEpochMs = draft.dateEpochMs,
+                    categoryId = draft.categoryId.ifBlank { "groc" },
+                    subcategory = draft.subcategory,
+                    paymentMode = draft.paymentMode,
+                    projectId = selectedProject?.id,
+                    vehicleId = selectedVehicle?.id,
+                    isPrivate = draft.isPrivate,
+                    items = items,
+                    odometerReading = odo,
+                    fuelPricePerLitre = fuelRate,
+                    fuelLitres = fuelQty
+                )
+                repository.addExpense(
+                    expense = expense,
+                    vehicleToReset = selectedVehicle,
+                    odometerReading = odo,
+                    serviceItemIdsDone = emptyList(),
+                    projectToCharge = selectedProject
+                )
+                recordForeignContributionIfNeeded(ready, selectedVehicle, selectedProject, draft.isPrivate)
+                draftStore.removeDraft(currentUserId, draft.id)
+                showToast("Approved & saved ${IndianFormatters.formatInr(expense.amount)}")
+                onDone()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Failed to approve draft")
+            } finally {
+                _isSaving.value = false
+            }
+        }
+    }
+
+    private suspend fun recordForeignContributionIfNeeded(
+        ready: AppDataState.Ready?,
+        vehicle: Vehicle?,
+        project: Project?,
+        isPrivate: Boolean
+    ) {
+        val wsId = ready?.workspace?.id ?: return
+        if (currentUserId !in ready.workspace.memberIds || isPrivate) return
+        if (vehicle != null && vehicle.userId.isNotBlank() && vehicle.userId != currentUserId) {
+            repository.recordVehicleContributor(wsId, vehicle.id, vehicle.userId)
+        }
+        if (project != null && project.userId.isNotBlank() && project.userId != currentUserId) {
+            repository.recordProjectContributor(wsId, project.id, project.userId)
+        }
+    }
+
+    // --- Shared Family Workspace & Privacy ---
+
+    fun createWorkspace(name: String) {
+        viewModelScope.launch {
+            _isSaving.value = true
+            try {
+                val ownerName = (appState.value as? AppDataState.Ready)?.profile?.displayName
+                    ?.takeIf { it.isNotBlank() }
+                    ?: displayName?.takeIf { it.isNotBlank() }
+                    ?: "Owner"
+                val ws = repository.createWorkspace(name, ownerName)
+                showToast("Workspace \"${ws.name}\" created · Code: ${ws.inviteCode}")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Failed to create workspace")
+            } finally {
+                _isSaving.value = false
+            }
+        }
+    }
+
+    fun joinWorkspace(inviteCode: String) {
+        viewModelScope.launch {
+            _isSaving.value = true
+            try {
+                val joinerName = (appState.value as? AppDataState.Ready)?.profile?.displayName
+                    ?.takeIf { it.isNotBlank() }
+                    ?: displayName?.takeIf { it.isNotBlank() }
+                    ?: "Member"
+                repository.joinWorkspaceByCode(inviteCode, joinerName)
+                showToast("Joined family workspace")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Could not join workspace")
+            } finally {
+                _isSaving.value = false
+            }
+        }
+    }
+
+    fun regenerateInviteCode(workspace: Workspace) {
+        viewModelScope.launch {
+            _isSaving.value = true
+            try {
+                val ownerName = (appState.value as? AppDataState.Ready)?.profile?.displayName
+                    ?.takeIf { it.isNotBlank() }
+                    ?: displayName?.takeIf { it.isNotBlank() }
+                    ?: "Owner"
+                val code = repository.regenerateInviteCode(workspace, ownerName)
+                showToast("New invite code: $code")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Failed to refresh invite code")
+            } finally {
+                _isSaving.value = false
+            }
+        }
+    }
+
+    fun removeWorkspaceMember(workspace: Workspace, targetUid: String, targetName: String) {
+        viewModelScope.launch {
+            _isSaving.value = true
+            try {
+                repository.removeMemberFromWorkspace(workspace, targetUid)
+                showToast("$targetName removed and their shared expenses deleted")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Failed to remove member")
+            } finally {
+                _isSaving.value = false
+            }
+        }
+    }
+
+    fun leaveWorkspace(workspaceId: String) {
+        viewModelScope.launch {
+            _isSaving.value = true
+            try {
+                repository.leaveWorkspace(workspaceId)
+                showToast("Left workspace. All your shared expenses were removed.")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Failed to leave workspace")
+            } finally {
+                _isSaving.value = false
+            }
+        }
+    }
+
+    fun deleteWorkspace(workspace: Workspace) {
+        viewModelScope.launch {
+            _isSaving.value = true
+            try {
+                repository.deleteWorkspace(workspace)
+                showToast("Workspace deleted")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Failed to delete workspace")
+            } finally {
+                _isSaving.value = false
+            }
+        }
+    }
+
+    fun toggleExpensePrivacy(expense: Expense) {
+        val nextPrivate = !expense.isPrivate
+        viewModelScope.launch {
+            try {
+                repository.updateExpensePrivacy(expense.id, nextPrivate)
+                showToast(if (nextPrivate) "Hidden from Family Workspace" else "Shared with Family Workspace")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Failed to update visibility")
+            }
+        }
+    }
+
+    fun deleteExpense(expenseId: String) {
+        viewModelScope.launch {
+            try {
+                val ready = appState.value as? AppDataState.Ready
+                repository.deleteExpense(expenseId)
+                val retainedExp = ready?.retainedExpenses?.firstOrNull { it.sourceExpenseId == expenseId }
+                if (retainedExp != null) {
+                    repository.deleteRetainedSharedExpense(retainedExp)
+                }
+                val matchingContrib = ready?.sharedProjectContributions?.firstOrNull {
+                    it.linkedExpenseId == expenseId && it.ownerUid == currentUserId
+                } ?: ready?.retainedProjectContributions?.firstOrNull {
+                    it.linkedExpenseId == expenseId && it.ownerUid == currentUserId
+                }
+                if (matchingContrib != null) {
+                    repository.deleteSharedProjectContribution(matchingContrib.workspaceId, matchingContrib)
+                }
+                showToast("Expense deleted")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Failed to delete expense")
+            }
+        }
+    }
+
+    fun deleteRetainedSharedExpense(sharedExpense: SharedExpense) {
+        viewModelScope.launch {
+            try {
+                repository.deleteRetainedSharedExpense(sharedExpense)
+                showToast("Contribution deleted")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Failed to delete contribution")
+            }
+        }
+    }
+
+    fun deleteSharedProjectContribution(contribution: SharedProjectContribution) {
+        viewModelScope.launch {
+            try {
+                repository.deleteSharedProjectContribution(contribution.workspaceId, contribution)
+                showToast("Project payment deleted")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Failed to delete payment")
             }
         }
     }
@@ -247,6 +842,7 @@ class SelavuViewModel(
         viewModelScope.launch {
             _isSaving.value = true
             try {
+                val ready = appState.value as? AppDataState.Ready
                 repository.addExpense(
                     expense = expense,
                     vehicleToReset = vehicleToReset,
@@ -254,6 +850,7 @@ class SelavuViewModel(
                     serviceItemIdsDone = serviceItemIdsDone,
                     projectToCharge = projectToCharge
                 )
+                recordForeignContributionIfNeeded(ready, vehicleToReset, projectToCharge, expense.isPrivate)
                 val extra = if (serviceItemIdsDone.isNotEmpty()) {
                     ". ${serviceItemIdsDone.size} tracker item${if (serviceItemIdsDone.size > 1) "s" else ""} reset"
                 } else ""
@@ -269,17 +866,53 @@ class SelavuViewModel(
         }
     }
 
+    fun updateExpense(
+        expense: Expense,
+        vehicleToReset: Vehicle?,
+        odometerReading: Int?,
+        serviceItemIdsDone: List<String>,
+        projectToCharge: Project?,
+        onDone: () -> Unit
+    ) {
+        val ready = appState.value as? AppDataState.Ready
+        if (ready?.isRetainedExpense(expense) == true) {
+            showToast("Past workspace contributions are read-only (delete only).")
+            return
+        }
+        viewModelScope.launch {
+            _isSaving.value = true
+            try {
+                repository.updateExpense(
+                    expense = expense,
+                    vehicleToReset = vehicleToReset,
+                    odometerReading = odometerReading,
+                    serviceItemIdsDone = serviceItemIdsDone
+                )
+                recordForeignContributionIfNeeded(ready, vehicleToReset, projectToCharge, expense.isPrivate)
+                showToast("Updated ${IndianFormatters.formatInr(expense.amount)}")
+                onDone()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Failed to update expense")
+            } finally {
+                _isSaving.value = false
+            }
+        }
+    }
+
     fun addVehicle(
         name: String,
         type: String,
         plate: String,
         odometer: Int,
         avgMileage: Double,
+        hiddenFromWorkspace: Boolean = false,
         onCreated: (String) -> Unit
     ) {
         viewModelScope.launch {
             try {
-                val id = repository.addVehicle(name, type, plate, odometer, avgMileage)
+                val id = repository.addVehicle(name, type, plate, odometer, avgMileage, hiddenFromWorkspace)
                 val count = if (type == "car") 6 else 8
                 showToast("$name added with $count service items")
                 onCreated(id)
@@ -287,6 +920,24 @@ class SelavuViewModel(
                 throw e
             } catch (e: Exception) {
                 showToast(e.localizedMessage ?: "Failed to add vehicle")
+            }
+        }
+    }
+
+    fun toggleVehicleHiddenFromWorkspace(vehicle: Vehicle) {
+        if (vehicle.userId.isNotBlank() && vehicle.userId != currentUserId) {
+            showToast("Only the creator can change sharing for this vehicle.")
+            return
+        }
+        val nextHidden = !vehicle.hiddenFromWorkspace
+        viewModelScope.launch {
+            try {
+                repository.updateVehicle(vehicle.copy(hiddenFromWorkspace = nextHidden))
+                showToast(if (nextHidden) "Vehicle hidden from Family Workspace" else "Vehicle shared with Family Workspace")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Failed to update vehicle visibility")
             }
         }
     }
@@ -392,7 +1043,37 @@ class SelavuViewModel(
         }
     }
 
+    fun updateBill(bill: Bill) {
+        viewModelScope.launch {
+            try {
+                repository.updateBill(bill)
+                showToast("Reminder updated")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Failed to update reminder")
+            }
+        }
+    }
+
+    fun deleteBill(billId: String) {
+        viewModelScope.launch {
+            try {
+                repository.deleteBill(billId)
+                showToast("Reminder deleted")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Failed to delete reminder")
+            }
+        }
+    }
+
     fun markBillPaid(bill: Bill, categories: List<Category>) {
+        if (bill.userId.isNotBlank() && bill.userId != currentUserId) {
+            showToast("Only ${bill.userId} can mark their shared reminder paid.")
+            return
+        }
         viewModelScope.launch {
             try {
                 val nextDue = repository.markBillPaid(bill)
@@ -407,10 +1088,16 @@ class SelavuViewModel(
         }
     }
 
-    fun addProject(name: String, budget: Double, template: String, onCreated: (String) -> Unit) {
+    fun addProject(
+        name: String,
+        budget: Double,
+        template: String,
+        hiddenFromWorkspace: Boolean = false,
+        onCreated: (String) -> Unit
+    ) {
         viewModelScope.launch {
             try {
-                val id = repository.addProject(name, budget, template)
+                val id = repository.addProject(name, budget, template, hiddenFromWorkspace)
                 showToast("Project created with $template phases")
                 onCreated(id)
             } catch (e: CancellationException) {
@@ -421,16 +1108,87 @@ class SelavuViewModel(
         }
     }
 
-    fun addProjectPayment(project: Project, phaseIdx: Int, title: String, amount: Double, vendor: String) {
+    fun toggleProjectHiddenFromWorkspace(project: Project) {
+        if (project.userId.isNotBlank() && project.userId != currentUserId) {
+            showToast("Only the creator can change sharing for this project.")
+            return
+        }
+        val nextHidden = !project.hiddenFromWorkspace
         viewModelScope.launch {
             try {
-                repository.addProjectPayment(project, phaseIdx, title, amount, vendor)
-                val phaseName = project.phases.getOrNull(phaseIdx)?.name ?: "project"
-                showToast("${IndianFormatters.formatInr(amount)} added to $phaseName")
+                repository.updateProject(project.copy(hiddenFromWorkspace = nextHidden))
+                showToast(if (nextHidden) "Project hidden from Family Workspace" else "Project shared with Family Workspace")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Failed to update project visibility")
+            }
+        }
+    }
+
+    fun addProjectPayment(
+        project: Project,
+        phaseIdx: Int,
+        title: String,
+        amount: Double,
+        vendor: String,
+        items: List<ProjectPaymentItem> = emptyList(),
+        updatedProductCatalog: List<ProjectProduct>? = null
+    ) {
+        viewModelScope.launch {
+            try {
+                val ready = appState.value as? AppDataState.Ready
+                val sharedProj = ready?.sharedProjects?.firstOrNull { it.id == project.id && it.ownerUid != currentUserId }
+                if (sharedProj != null && ready.workspace != null && currentUserId in ready.workspace.memberIds) {
+                    val ownerName = ready.profile.displayName?.takeIf { it.isNotBlank() }
+                        ?: displayName?.takeIf { it.isNotBlank() }
+                        ?: "Member"
+                    val phaseName = project.phases.getOrNull(phaseIdx)?.name ?: "Contribution"
+                    repository.addSharedProjectContribution(
+                        workspace = ready.workspace,
+                        sharedProject = sharedProj,
+                        ownerName = ownerName,
+                        phaseName = phaseName,
+                        title = title,
+                        amount = amount,
+                        vendor = vendor,
+                        items = items
+                    )
+                    showToast("${IndianFormatters.formatInr(amount)} added to shared project")
+                } else {
+                    repository.addProjectPayment(
+                        project = project,
+                        phaseIndex = phaseIdx,
+                        title = title,
+                        amount = amount,
+                        vendorName = vendor,
+                        items = items,
+                        updatedProductCatalog = updatedProductCatalog
+                    )
+                    val phaseName = project.phases.getOrNull(phaseIdx)?.name ?: "project"
+                    showToast("${IndianFormatters.formatInr(amount)} added to $phaseName")
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 showToast(e.localizedMessage ?: "Failed to save payment")
+            }
+        }
+    }
+
+    fun updateProjectProducts(project: Project, products: List<ProjectProduct>) {
+        if (project.userId.isNotBlank() && project.userId != currentUserId) {
+            showToast("Only the creator can edit project products.")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                repository.updateProjectProducts(project, products)
+                showToast("Project products & units updated (${products.size})")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Failed to update project products")
             }
         }
     }
@@ -517,6 +1275,7 @@ class SelavuViewModel(
             throw e
         } catch (e: Exception) {
             stepperJob.cancel()
+            Log.e(TAG, "Bill scan extraction error", e)
             _scanState.value = ScanUiState.Error(
                 e.localizedMessage ?: "AI bill scan failed. Check network/App Check and try again."
             )
@@ -566,18 +1325,27 @@ class SelavuViewModel(
     fun computeAttentionAlerts(
         vehicles: List<Vehicle>,
         bills: List<Bill>,
-        categories: List<Category>
+        categories: List<Category>,
+        sharedVehicles: List<SharedVehicle> = emptyList(),
+        sharedBills: List<SharedBill> = emptyList()
     ): List<AttentionAlert> {
         val nowMs = System.currentTimeMillis()
         val alerts = mutableListOf<AttentionAlert>()
 
-        vehicles.forEach { v ->
+        val allVehicles = vehicles + sharedVehicles
+            .filter { it.ownerUid != currentUserId }
+            .map { it.toVehicle(includeServiceData = true) }
+
+        allVehicles.forEach { v ->
+            val ownerTag = if (v.userId.isNotBlank() && v.userId != currentUserId) {
+                sharedVehicles.firstOrNull { it.id == v.id }?.ownerName?.let { " ($it)" }.orEmpty()
+            } else ""
             v.items.forEach { item ->
                 val state = item.computeState(v.odometer, nowMs)
                 if (state.status != ServiceStatus.OK) {
                     alerts += AttentionAlert(
                         id = "${v.id}_${item.id}",
-                        title = "${item.name} · ${v.shortName}",
+                        title = "${item.name} · ${v.shortName}$ownerTag",
                         statusLabel = state.statusLabel,
                         severity = state.status,
                         iconKey = item.iconKey,
@@ -590,7 +1358,11 @@ class SelavuViewModel(
             }
         }
 
-        bills.filter { !it.paid }.forEach { b ->
+        val allBills = bills + sharedBills
+            .filter { it.ownerUid != currentUserId }
+            .map { it.toBill() }
+
+        allBills.filter { !it.paid }.forEach { b ->
             val dl = IndianFormatters.daysBetween(b.dueEpochMs, nowMs)
             if (dl <= 7) {
                 val catColor = categories.firstOrNull { it.id == b.categoryId }?.colorIndex ?: 4
@@ -600,9 +1372,12 @@ class SelavuViewModel(
                     dl == 0 -> "Due today"
                     else -> "Due in $dl days"
                 }
+                val ownerTag = if (b.userId.isNotBlank() && b.userId != currentUserId) {
+                    sharedBills.firstOrNull { it.id == b.id }?.ownerName?.let { " · $it" }.orEmpty()
+                } else ""
                 alerts += AttentionAlert(
                     id = b.id,
-                    title = "${b.name} · ${IndianFormatters.formatInr(b.amount)}",
+                    title = "${b.name}$ownerTag · ${IndianFormatters.formatInr(b.amount)}",
                     statusLabel = label,
                     severity = status,
                     iconKey = b.iconKey,
@@ -633,6 +1408,7 @@ class SelavuViewModel(
                 return SelavuViewModel(
                     repository = SelavuRepository(db),
                     scannerService = BillScannerService(),
+                    draftStore = ReviewDraftStore(appContext),
                     currentUserId = userId,
                     displayName = displayName
                 ) as T

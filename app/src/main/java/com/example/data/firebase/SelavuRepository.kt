@@ -8,12 +8,21 @@ import com.example.data.model.Expense
 import com.example.data.model.ExpenseItem
 import com.example.data.model.Project
 import com.example.data.model.ProjectPayment
+import com.example.data.model.ProjectPaymentItem
 import com.example.data.model.ProjectPhase
+import com.example.data.model.ProjectProduct
 import com.example.data.model.ScannedBillDraft
 import com.example.data.model.ServiceItem
 import com.example.data.model.ServiceVisit
+import com.example.data.model.SharedBill
+import com.example.data.model.SharedCategory
+import com.example.data.model.SharedExpense
+import com.example.data.model.SharedProject
+import com.example.data.model.SharedProjectContribution
+import com.example.data.model.SharedVehicle
 import com.example.data.model.UserProfile
 import com.example.data.model.Vehicle
+import com.example.data.model.Workspace
 import com.example.util.IndianFormatters
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
@@ -37,6 +46,7 @@ class SelavuRepository(private val db: FirebaseFirestore) {
     )
 
     private val auth = Firebase.auth
+    private val workspaceHelper by lazy { WorkspaceRepositoryHelper(db, auth) }
 
     private fun requireUserId(): String =
         auth.currentUser?.uid
@@ -260,6 +270,17 @@ class SelavuRepository(private val db: FirebaseFirestore) {
         val currentUid = requireUserId()
         require(currentUid == uid) { "Authenticated user mismatch." }
         try {
+            val profileRef = userDoc(uid)
+            val profileSnap = profileRef.get().await()
+            val wsId = profileSnap.getString("workspaceId")
+            if (!wsId.isNullOrBlank()) {
+                if (deleteProfileDoc) {
+                    workspaceHelper.leaveWorkspace(wsId)
+                } else {
+                    workspaceHelper.removeMySharedExpensesOnly(wsId)
+                }
+            }
+
             val docRefs = mutableListOf<com.google.firebase.firestore.DocumentReference>()
             val collections = listOf("expenses", "vehicles", "bills", "projects", "categories")
             for (name in collections) {
@@ -272,7 +293,6 @@ class SelavuRepository(private val db: FirebaseFirestore) {
                 batch.commit().await()
             }
 
-            val profileRef = userDoc(uid)
             if (deleteProfileDoc) {
                 if (profileRef.get().await().exists()) {
                     profileRef.delete().await()
@@ -385,35 +405,45 @@ class SelavuRepository(private val db: FirebaseFirestore) {
             val batch = db.batch()
             batch.set(expRef, expense.copy(id = expId, userId = uid).toCreateMap(uid))
 
-            if (vehicleToReset != null) {
-                val odo = maxOf(vehicleToReset.odometer, odometerReading ?: vehicleToReset.odometer)
-                val doneNames = mutableListOf<String>()
-                val updatedItems = vehicleToReset.items.map { item ->
-                    if (item.id in serviceItemIdsDone) {
-                        doneNames += item.name
-                        item.copy(lastDoneEpochMs = expense.dateEpochMs, lastDoneKm = odo)
-                    } else item
+            if (vehicleToReset != null && vehicleToReset.userId == uid) {
+                val odoCandidate = odometerReading ?: expense.odometerReading ?: vehicleToReset.odometer
+                val odo = maxOf(vehicleToReset.odometer, odoCandidate)
+                val isService = serviceItemIdsDone.isNotEmpty() || expense.subcategory.equals("Service", ignoreCase = true)
+                if (isService) {
+                    val doneNames = mutableListOf<String>()
+                    val updatedItems = vehicleToReset.items.map { item ->
+                        if (item.id in serviceItemIdsDone) {
+                            doneNames += item.name
+                            item.copy(lastDoneEpochMs = expense.dateEpochMs, lastDoneKm = odo)
+                        } else item
+                    }
+                    val visit = ServiceVisit(
+                        dateEpochMs = expense.dateEpochMs,
+                        odometer = odo,
+                        workshop = expense.title.ifBlank { "Service visit" },
+                        amount = expense.amount,
+                        itemsDone = if (doneNames.isNotEmpty()) doneNames else listOf("General service"),
+                        expenseId = expId
+                    )
+                    val updatedVehicle = vehicleToReset.copy(
+                        odometer = odo,
+                        items = updatedItems,
+                        history = listOf(visit) + vehicleToReset.history
+                    )
+                    batch.update(
+                        userDoc(uid).collection("vehicles").document(vehicleToReset.id),
+                        updatedVehicle.toUpdateMap()
+                    )
+                } else if (odo > vehicleToReset.odometer) {
+                    val updatedVehicle = vehicleToReset.copy(odometer = odo)
+                    batch.update(
+                        userDoc(uid).collection("vehicles").document(vehicleToReset.id),
+                        updatedVehicle.toUpdateMap()
+                    )
                 }
-                val visit = ServiceVisit(
-                    dateEpochMs = expense.dateEpochMs,
-                    odometer = odo,
-                    workshop = expense.title.ifBlank { "Service visit" },
-                    amount = expense.amount,
-                    itemsDone = if (doneNames.isNotEmpty()) doneNames else listOf("General service"),
-                    expenseId = expId
-                )
-                val updatedVehicle = vehicleToReset.copy(
-                    odometer = odo,
-                    items = updatedItems,
-                    history = listOf(visit) + vehicleToReset.history
-                )
-                batch.update(
-                    userDoc(uid).collection("vehicles").document(vehicleToReset.id),
-                    updatedVehicle.toUpdateMap()
-                )
             }
 
-            if (projectToCharge != null) {
+            if (projectToCharge != null && projectToCharge.userId == uid) {
                 val updatedPhases = projectToCharge.phases.mapIndexed { idx, ph ->
                     if (idx == 0) ph.copy(spent = ph.spent + expense.amount) else ph
                 }
@@ -444,12 +474,64 @@ class SelavuRepository(private val db: FirebaseFirestore) {
         }
     }
 
+    suspend fun updateExpense(
+        expense: Expense,
+        vehicleToReset: Vehicle? = null,
+        odometerReading: Int? = null,
+        serviceItemIdsDone: List<String> = emptyList()
+    ) {
+        val uid = requireUserId()
+        require(expense.id.isNotBlank()) { "Expense ID cannot be blank when updating." }
+        val expRef = userDoc(uid).collection("expenses").document(expense.id)
+        try {
+            val batch = db.batch()
+            batch.update(expRef, expense.toUpdateMap())
+
+            if (vehicleToReset != null && vehicleToReset.userId == uid) {
+                val odoCandidate = odometerReading ?: expense.odometerReading ?: vehicleToReset.odometer
+                val odo = maxOf(vehicleToReset.odometer, odoCandidate)
+                val isService = serviceItemIdsDone.isNotEmpty()
+                if (isService) {
+                    val doneNames = mutableListOf<String>()
+                    val updatedItems = vehicleToReset.items.map { item ->
+                        if (item.id in serviceItemIdsDone) {
+                            doneNames += item.name
+                            item.copy(lastDoneEpochMs = expense.dateEpochMs, lastDoneKm = odo)
+                        } else item
+                    }
+                    val updatedVehicle = vehicleToReset.copy(
+                        odometer = odo,
+                        items = updatedItems
+                    )
+                    batch.update(
+                        userDoc(uid).collection("vehicles").document(vehicleToReset.id),
+                        updatedVehicle.toUpdateMap()
+                    )
+                } else if (odo > vehicleToReset.odometer) {
+                    val updatedVehicle = vehicleToReset.copy(odometer = odo)
+                    batch.update(
+                        userDoc(uid).collection("vehicles").document(vehicleToReset.id),
+                        updatedVehicle.toUpdateMap()
+                    )
+                }
+            }
+
+            batch.commit().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, expRef.path)
+            throw e
+        }
+    }
+
     suspend fun addVehicle(
         name: String,
         type: String,
         plate: String,
         odometer: Int,
-        avgMileage: Double
+        avgMileage: Double,
+        hiddenFromWorkspace: Boolean = false
     ): String {
         val uid = requireUserId()
         val id = "v_${UUID.randomUUID().toString().take(8)}"
@@ -467,7 +549,8 @@ class SelavuRepository(private val db: FirebaseFirestore) {
             odometer = odometer,
             avgMileage = avgMileage,
             items = items,
-            history = emptyList()
+            history = emptyList(),
+            hiddenFromWorkspace = hiddenFromWorkspace
         )
         val ref = userDoc(uid).collection("vehicles").document(id)
         try {
@@ -505,6 +588,33 @@ class SelavuRepository(private val db: FirebaseFirestore) {
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.CREATE, ref.path)
+            throw e
+        }
+    }
+
+    suspend fun updateBill(bill: Bill) {
+        val uid = requireUserId()
+        require(bill.id.isNotBlank()) { "Bill ID cannot be blank when updating." }
+        val ref = userDoc(uid).collection("bills").document(bill.id)
+        try {
+            ref.update(bill.toUpdateMap()).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, ref.path)
+            throw e
+        }
+    }
+
+    suspend fun deleteBill(billId: String) {
+        val uid = requireUserId()
+        val ref = userDoc(uid).collection("bills").document(billId)
+        try {
+            ref.delete().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, ref.path)
             throw e
         }
     }
@@ -568,7 +678,12 @@ class SelavuRepository(private val db: FirebaseFirestore) {
         }
     }
 
-    suspend fun addProject(name: String, totalBudget: Double, templateName: String): String {
+    suspend fun addProject(
+        name: String,
+        totalBudget: Double,
+        templateName: String,
+        hiddenFromWorkspace: Boolean = false
+    ): String {
         val uid = requireUserId()
         val id = "p_${UUID.randomUUID().toString().take(8)}"
         val splits = SampleDataSeeder.projectTemplates[templateName]
@@ -591,7 +706,9 @@ class SelavuRepository(private val db: FirebaseFirestore) {
             budget = totalBudget,
             phases = phases,
             vendors = emptyList(),
-            payments = emptyList()
+            payments = emptyList(),
+            productCatalog = Project.defaultProjectProducts,
+            hiddenFromWorkspace = hiddenFromWorkspace
         )
         val ref = userDoc(uid).collection("projects").document(id)
         try {
@@ -605,12 +722,31 @@ class SelavuRepository(private val db: FirebaseFirestore) {
         }
     }
 
+    suspend fun updateProject(project: Project) {
+        val uid = requireUserId()
+        val ref = userDoc(uid).collection("projects").document(project.id)
+        try {
+            ref.update(project.toUpdateMap()).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, ref.path)
+            throw e
+        }
+    }
+
+    suspend fun updateProjectProducts(project: Project, products: List<ProjectProduct>) {
+        updateProject(project.copy(productCatalog = products))
+    }
+
     suspend fun addProjectPayment(
         project: Project,
         phaseIndex: Int,
         title: String,
         amount: Double,
-        vendorName: String = "—"
+        vendorName: String = "—",
+        items: List<ProjectPaymentItem> = emptyList(),
+        updatedProductCatalog: List<ProjectProduct>? = null
     ) {
         val uid = requireUserId()
         val nowMs = System.currentTimeMillis()
@@ -622,17 +758,20 @@ class SelavuRepository(private val db: FirebaseFirestore) {
         val updatedVendors = project.vendors.map { v ->
             if (v.name.equals(vendorName, ignoreCase = true)) v.copy(paid = v.paid + amount) else v
         }
+        val cleanItems = items.filter { it.name.isNotBlank() && it.qty > 0.0 }
         val newPayment = ProjectPayment(
             dateEpochMs = nowMs,
             title = title.ifBlank { "Payment" },
             amount = amount,
             vendor = vendorName.ifBlank { "—" },
-            phaseName = phaseName
+            phaseName = phaseName,
+            items = cleanItems
         )
         val updatedProject = project.copy(
             phases = updatedPhases,
             vendors = updatedVendors,
-            payments = listOf(newPayment) + project.payments
+            payments = listOf(newPayment) + project.payments,
+            productCatalog = updatedProductCatalog ?: project.productCatalog
         )
         val projRef = userDoc(uid).collection("projects").document(project.id)
         val expId = "exp_${UUID.randomUUID().toString().take(8)}"
@@ -640,6 +779,15 @@ class SelavuRepository(private val db: FirebaseFirestore) {
         try {
             val batch = db.batch()
             batch.update(projRef, updatedProject.toUpdateMap())
+            val mappedExpenseItems = cleanItems.map { item ->
+                ExpenseItem(
+                    name = item.name,
+                    qty = item.qty,
+                    unit = item.unit,
+                    rate = item.unitPrice,
+                    amount = item.totalPrice
+                )
+            }.takeIf { it.isNotEmpty() }
             val expense = Expense(
                 id = expId,
                 userId = uid,
@@ -649,7 +797,8 @@ class SelavuRepository(private val db: FirebaseFirestore) {
                 categoryId = if (project.colorIndex == 7) "biz" else "home",
                 subcategory = phaseName,
                 paymentMode = "Bank",
-                projectId = project.id
+                projectId = project.id,
+                items = mappedExpenseItems
             )
             batch.set(expRef, expense.toCreateMap(uid))
             batch.commit().await()
@@ -735,7 +884,7 @@ class SelavuRepository(private val db: FirebaseFirestore) {
             batch.set(expRef, expense.toCreateMap(uid))
 
             var resetCount = 0
-            if (selectedVehicle != null && draft.suggestedCategoryId == "veh") {
+            if (selectedVehicle != null && selectedVehicle.userId == uid && draft.suggestedCategoryId == "veh") {
                 val mappedIds = draft.items.mapNotNull { it.mappedServiceItemId }.toSet()
                 val updatedItems = selectedVehicle.items.map { svc ->
                     if (svc.id in mappedIds) {
@@ -773,4 +922,179 @@ class SelavuRepository(private val db: FirebaseFirestore) {
             throw e
         }
     }
+
+    suspend fun updateExpensePrivacy(expenseId: String, isPrivate: Boolean) {
+        val uid = requireUserId()
+        val ref = userDoc(uid).collection("expenses").document(expenseId)
+        try {
+            ref.update(
+                mapOf(
+                    "isPrivate" to isPrivate,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, ref.path)
+            throw e
+        }
+    }
+
+    suspend fun deleteExpense(expenseId: String) {
+        val uid = requireUserId()
+        val ref = userDoc(uid).collection("expenses").document(expenseId)
+        try {
+            ref.delete().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, ref.path)
+            throw e
+        }
+    }
+
+    // --- Shared Family Workspace Delegation ---
+
+    fun observeWorkspace(workspaceId: String?): Flow<Workspace?> =
+        workspaceHelper.observeWorkspace(workspaceId)
+
+    fun observeSharedExpenses(workspaceId: String?, uid: String): Flow<List<SharedExpense>> =
+        workspaceHelper.observeSharedExpenses(workspaceId, uid)
+
+    fun observeSharedVehicles(workspaceId: String?, uid: String): Flow<List<SharedVehicle>> =
+        workspaceHelper.observeSharedVehicles(workspaceId, uid)
+
+    fun observeSharedProjects(workspaceId: String?, uid: String): Flow<List<SharedProject>> =
+        workspaceHelper.observeSharedProjects(workspaceId, uid)
+
+    fun observeSharedProjectContributions(workspaceId: String?, uid: String): Flow<List<SharedProjectContribution>> =
+        workspaceHelper.observeSharedProjectContributions(workspaceId, uid)
+
+    fun observeSharedBills(workspaceId: String?, uid: String): Flow<List<SharedBill>> =
+        workspaceHelper.observeSharedBills(workspaceId, uid)
+
+    fun observeSharedCategories(workspaceId: String?, uid: String): Flow<List<SharedCategory>> =
+        workspaceHelper.observeSharedCategories(workspaceId, uid)
+
+    fun observeRetainedWorkspaceBundle(
+        uid: String,
+        contributedWorkspaceIds: List<String>,
+        activeWorkspaceId: String?
+    ): Flow<RetainedWorkspaceBundle> =
+        workspaceHelper.observeRetainedWorkspaceBundle(uid, contributedWorkspaceIds, activeWorkspaceId)
+
+    suspend fun recordVehicleContributor(workspaceId: String, sharedVehicleId: String, vehicleOwnerUid: String) =
+        workspaceHelper.recordVehicleContributor(workspaceId, sharedVehicleId, vehicleOwnerUid)
+
+    suspend fun recordProjectContributor(workspaceId: String, sharedProjectId: String, projectOwnerUid: String) =
+        workspaceHelper.recordProjectContributor(workspaceId, sharedProjectId, projectOwnerUid)
+
+    suspend fun addSharedProjectContribution(
+        workspace: Workspace,
+        sharedProject: SharedProject,
+        ownerName: String,
+        phaseName: String,
+        title: String,
+        amount: Double,
+        vendor: String,
+        items: List<ProjectPaymentItem>
+    ): String {
+        val uid = requireUserId()
+        val expId = "exp_${UUID.randomUUID().toString().take(8)}"
+        val cleanItems = items.filter { it.name.isNotBlank() && it.qty > 0.0 }
+        val mappedExpenseItems = cleanItems.map { item ->
+            ExpenseItem(
+                name = item.name,
+                qty = item.qty,
+                unit = item.unit,
+                rate = item.unitPrice,
+                amount = item.totalPrice
+            )
+        }.takeIf { it.isNotEmpty() }
+        val exp = Expense(
+            id = expId,
+            userId = uid,
+            title = title.ifBlank { "Payment" },
+            amount = amount,
+            dateEpochMs = System.currentTimeMillis(),
+            categoryId = if (sharedProject.colorIndex == 7) "biz" else "home",
+            subcategory = phaseName,
+            paymentMode = "Bank",
+            projectId = sharedProject.id,
+            items = mappedExpenseItems
+        )
+        userDoc(uid).collection("expenses").document(expId).set(exp.toCreateMap(uid)).await()
+        return workspaceHelper.addSharedProjectContribution(
+            workspace = workspace,
+            sharedProject = sharedProject,
+            ownerName = ownerName,
+            title = title,
+            amount = amount,
+            vendor = vendor,
+            phaseName = phaseName,
+            items = cleanItems,
+            linkedExpenseId = expId
+        )
+    }
+
+    suspend fun deleteSharedProjectContribution(workspaceId: String, contribution: SharedProjectContribution) =
+        workspaceHelper.deleteSharedProjectContribution(workspaceId, contribution)
+
+    suspend fun deleteRetainedSharedExpense(sharedExpense: SharedExpense) =
+        workspaceHelper.deleteRetainedSharedExpense(sharedExpense)
+
+    suspend fun createWorkspace(name: String, ownerName: String): Workspace =
+        workspaceHelper.createWorkspace(name, ownerName)
+
+    suspend fun joinWorkspaceByCode(inviteCode: String, joinerName: String): String =
+        workspaceHelper.joinWorkspaceByCode(inviteCode, joinerName)
+
+    suspend fun regenerateInviteCode(workspace: Workspace, ownerName: String): String =
+        workspaceHelper.regenerateInviteCode(workspace, ownerName)
+
+    suspend fun removeMemberFromWorkspace(workspace: Workspace, targetUid: String) =
+        workspaceHelper.removeMemberFromWorkspace(workspace, targetUid)
+
+    suspend fun leaveWorkspace(workspaceId: String) =
+        workspaceHelper.leaveWorkspace(workspaceId)
+
+    suspend fun deleteWorkspace(workspace: Workspace) =
+        workspaceHelper.deleteWorkspace(workspace)
+
+    suspend fun clearUserWorkspaceId(uid: String) =
+        workspaceHelper.clearUserWorkspaceId(uid)
+
+    suspend fun syncMyWorkspaceShares(
+        uid: String,
+        ownerName: String,
+        workspace: Workspace,
+        categories: List<Category>,
+        expenses: List<Expense>,
+        vehicles: List<Vehicle> = emptyList(),
+        bills: List<Bill> = emptyList(),
+        projects: List<Project> = emptyList(),
+        existingSharedByMe: List<SharedExpense>? = null,
+        existingSharedVehicles: List<SharedVehicle>? = null,
+        existingSharedProjects: List<SharedProject>? = null,
+        existingSharedBills: List<SharedBill>? = null,
+        existingSharedCategories: List<SharedCategory>? = null,
+        existingMyContributions: List<SharedProjectContribution>? = null
+    ) = workspaceHelper.syncMyWorkspaceShares(
+        uid = uid,
+        ownerName = ownerName,
+        workspace = workspace,
+        categories = categories,
+        expenses = expenses,
+        vehicles = vehicles,
+        bills = bills,
+        projects = projects,
+        existingSharedByMe = existingSharedByMe,
+        existingSharedVehicles = existingSharedVehicles,
+        existingSharedProjects = existingSharedProjects,
+        existingSharedBills = existingSharedBills,
+        existingSharedCategories = existingSharedCategories,
+        existingMyContributions = existingMyContributions
+    )
 }
+

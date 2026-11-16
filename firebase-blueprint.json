@@ -2,7 +2,7 @@
   "entities": {
     "UserProfile": {
       "title": "UserProfile",
-      "description": "User preferences, budget settings, and sample-data seed status.",
+      "description": "User preferences, budget settings, optional shared workspace membership, contributed workspace IDs, and sample-data seed status.",
       "type": "object",
       "properties": {
         "userId": { "type": "string", "description": "Authenticated Firebase UID" },
@@ -10,6 +10,8 @@
         "language": { "type": "string", "enum": ["en", "ta"], "description": "UI language code" },
         "seeded": { "type": "boolean", "description": "Whether initial sample data has been seeded" },
         "displayName": { "type": "string", "description": "Optional display name" },
+        "workspaceId": { "type": "string", "description": "Optional joined shared family workspace ID" },
+        "contributedWorkspaceIds": { "type": "array", "description": "Workspace IDs where user contributed to another member's shared vehicle or project" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation" },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update" }
       },
@@ -17,7 +19,7 @@
     },
     "Category": {
       "title": "Category",
-      "description": "Customizable expense category with icon, color token index, and subcategories.",
+      "description": "Customizable expense category with icon, color token index, subcategories, and optional workspace visibility.",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
@@ -26,6 +28,7 @@
         "colorIndex": { "type": "integer" },
         "subcategories": { "type": "array" },
         "sortOrder": { "type": "integer" },
+        "hiddenFromWorkspace": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -33,7 +36,7 @@
     },
     "Expense": {
       "title": "Expense",
-      "description": "Individual expense entry with optional GST invoice metadata and item-level breakdown.",
+      "description": "Individual expense entry with optional GST invoice metadata, privacy flag, and item-level breakdown.",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
@@ -43,6 +46,7 @@
         "categoryId": { "type": "string" },
         "subcategory": { "type": "string" },
         "paymentMode": { "type": "string", "enum": ["UPI", "Cash", "Card", "Bank"] },
+        "isPrivate": { "type": "boolean" },
         "projectId": { "type": "string" },
         "vehicleId": { "type": "string" },
         "gstin": { "type": "string" },
@@ -54,6 +58,9 @@
         "roundOff": { "type": "number" },
         "items": { "type": "array" },
         "attachmentNotes": { "type": "array" },
+        "odometerReading": { "type": "integer" },
+        "fuelPricePerLitre": { "type": "number" },
+        "fuelLitres": { "type": "number" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -61,7 +68,7 @@
     },
     "Vehicle": {
       "title": "Vehicle",
-      "description": "Tracked vehicle with odometer, mileage, service checklist items, and visit history.",
+      "description": "Tracked vehicle with odometer, mileage, service checklist items, visit history, and workspace visibility.",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
@@ -73,6 +80,7 @@
         "avgMileage": { "type": "number" },
         "items": { "type": "array" },
         "history": { "type": "array" },
+        "hiddenFromWorkspace": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -80,7 +88,7 @@
     },
     "Bill": {
       "title": "Bill",
-      "description": "Recurring or one-off bill reminder with due date, repeat schedule, and paid status.",
+      "description": "Recurring or one-off bill reminder with due date, repeat schedule, paid status, and workspace visibility.",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
@@ -95,6 +103,7 @@
         "autopay": { "type": "boolean" },
         "paid": { "type": "boolean" },
         "paidOnEpochMs": { "type": "integer" },
+        "hiddenFromWorkspace": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -102,7 +111,7 @@
     },
     "Project": {
       "title": "Project",
-      "description": "Long-running project (house build, business setup, renovation) with phase budgets and vendors.",
+      "description": "Long-running project (house build, business setup, renovation) with phase budgets, vendors, and workspace visibility.",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
@@ -114,10 +123,290 @@
         "phases": { "type": "array" },
         "vendors": { "type": "array" },
         "payments": { "type": "array" },
+        "productCatalog": { "type": "array" },
+        "hiddenFromWorkspace": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "name", "subtitle", "iconKey", "colorIndex", "budget", "phases", "vendors", "payments", "createdAt", "updatedAt"]
+    },
+    "Workspace": {
+      "title": "Workspace",
+      "description": "Shared family workspace linking members who share selected expenses, vehicles, projects, bills, and categories.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "inviteCode": { "type": "string" },
+        "memberIds": { "type": "array" },
+        "members": { "type": "object" },
+        "lastJoinCode": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "ownerUid", "inviteCode", "memberIds", "members", "createdAt", "updatedAt"]
+    },
+    "WorkspaceInvite": {
+      "title": "WorkspaceInvite",
+      "description": "Invite token document mapping a short invite code to a shared family workspace.",
+      "type": "object",
+      "properties": {
+        "workspaceId": { "type": "string" },
+        "workspaceName": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["workspaceId", "workspaceName", "ownerUid", "ownerName", "createdAt"]
+    },
+    "SharedExpense": {
+      "title": "SharedExpense",
+      "description": "Non-private expense shared into a family workspace; retained read-only for the contributor only if linked to a foreign vehicle/project upon departure.",
+      "type": "object",
+      "properties": {
+        "workspaceId": { "type": "string" },
+        "sourceExpenseId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "memberIds": { "type": "array" },
+        "title": { "type": "string" },
+        "amount": { "type": "number" },
+        "dateEpochMs": { "type": "integer" },
+        "categoryId": { "type": "string" },
+        "categoryName": { "type": "string" },
+        "categoryIconKey": { "type": "string" },
+        "categoryColorIndex": { "type": "integer" },
+        "subcategory": { "type": "string" },
+        "paymentMode": { "type": "string", "enum": ["UPI", "Cash", "Card", "Bank"] },
+        "sharedVehicleId": { "type": "string" },
+        "sharedVehicleOwnerUid": { "type": "string" },
+        "sharedProjectId": { "type": "string" },
+        "sharedProjectOwnerUid": { "type": "string" },
+        "odometerReading": { "type": "integer" },
+        "fuelPricePerLitre": { "type": "number" },
+        "fuelLitres": { "type": "number" },
+        "retainedForDeparture": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "workspaceId",
+        "sourceExpenseId",
+        "ownerUid",
+        "ownerName",
+        "memberIds",
+        "title",
+        "amount",
+        "dateEpochMs",
+        "categoryId",
+        "categoryName",
+        "categoryIconKey",
+        "categoryColorIndex",
+        "subcategory",
+        "paymentMode",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SharedVehicle": {
+      "title": "SharedVehicle",
+      "description": "Vehicle shared into a family workspace; contributors retain read-only visibility after leaving or removal.",
+      "type": "object",
+      "properties": {
+        "workspaceId": { "type": "string" },
+        "sourceVehicleId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "memberIds": { "type": "array" },
+        "contributorIds": { "type": "array" },
+        "name": { "type": "string" },
+        "shortName": { "type": "string" },
+        "type": { "type": "string", "enum": ["bike", "car"] },
+        "plate": { "type": "string" },
+        "odometer": { "type": "integer" },
+        "avgMileage": { "type": "number" },
+        "items": { "type": "array" },
+        "history": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "workspaceId",
+        "sourceVehicleId",
+        "ownerUid",
+        "ownerName",
+        "memberIds",
+        "contributorIds",
+        "name",
+        "shortName",
+        "type",
+        "plate",
+        "odometer",
+        "avgMileage",
+        "items",
+        "history",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SharedProject": {
+      "title": "SharedProject",
+      "description": "Project shared into a family workspace; contributors retain read-only visibility after leaving or removal.",
+      "type": "object",
+      "properties": {
+        "workspaceId": { "type": "string" },
+        "sourceProjectId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "memberIds": { "type": "array" },
+        "contributorIds": { "type": "array" },
+        "name": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "iconKey": { "type": "string" },
+        "colorIndex": { "type": "integer" },
+        "budget": { "type": "number" },
+        "phases": { "type": "array" },
+        "vendors": { "type": "array" },
+        "payments": { "type": "array" },
+        "productCatalog": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "workspaceId",
+        "sourceProjectId",
+        "ownerUid",
+        "ownerName",
+        "memberIds",
+        "contributorIds",
+        "name",
+        "subtitle",
+        "iconKey",
+        "colorIndex",
+        "budget",
+        "phases",
+        "vendors",
+        "payments",
+        "productCatalog",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SharedProjectContribution": {
+      "title": "SharedProjectContribution",
+      "description": "Workspace member payment or itemized contribution to a shared project.",
+      "type": "object",
+      "properties": {
+        "workspaceId": { "type": "string" },
+        "sharedProjectId": { "type": "string" },
+        "projectOwnerUid": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "memberIds": { "type": "array" },
+        "retainedForDeparture": { "type": "boolean" },
+        "dateEpochMs": { "type": "integer" },
+        "title": { "type": "string" },
+        "amount": { "type": "number" },
+        "vendor": { "type": "string" },
+        "phaseName": { "type": "string" },
+        "items": { "type": "array" },
+        "linkedExpenseId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "workspaceId",
+        "sharedProjectId",
+        "projectOwnerUid",
+        "ownerUid",
+        "ownerName",
+        "memberIds",
+        "dateEpochMs",
+        "title",
+        "amount",
+        "vendor",
+        "phaseName",
+        "items",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SharedBill": {
+      "title": "SharedBill",
+      "description": "Bill reminder shared into a family workspace while creator and members are active in the workspace.",
+      "type": "object",
+      "properties": {
+        "workspaceId": { "type": "string" },
+        "sourceBillId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "memberIds": { "type": "array" },
+        "name": { "type": "string" },
+        "amount": { "type": "number" },
+        "dueEpochMs": { "type": "integer" },
+        "repeat": { "type": "string", "enum": ["Once", "Monthly", "Bi-monthly", "Half-yearly", "Yearly"] },
+        "reminder": { "type": "string", "enum": ["On the day", "3 days before", "7 days before"] },
+        "categoryId": { "type": "string" },
+        "subcategory": { "type": "string" },
+        "iconKey": { "type": "string" },
+        "autopay": { "type": "boolean" },
+        "paid": { "type": "boolean" },
+        "paidOnEpochMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "workspaceId",
+        "sourceBillId",
+        "ownerUid",
+        "ownerName",
+        "memberIds",
+        "name",
+        "amount",
+        "dueEpochMs",
+        "repeat",
+        "reminder",
+        "categoryId",
+        "subcategory",
+        "iconKey",
+        "autopay",
+        "paid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SharedCategory": {
+      "title": "SharedCategory",
+      "description": "Category and subcategory set shared into a family workspace while creator and members are active in the workspace.",
+      "type": "object",
+      "properties": {
+        "workspaceId": { "type": "string" },
+        "sourceCategoryId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "memberIds": { "type": "array" },
+        "name": { "type": "string" },
+        "iconKey": { "type": "string" },
+        "colorIndex": { "type": "integer" },
+        "subcategories": { "type": "array" },
+        "sortOrder": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "workspaceId",
+        "sourceCategoryId",
+        "ownerUid",
+        "ownerName",
+        "memberIds",
+        "name",
+        "iconKey",
+        "colorIndex",
+        "subcategories",
+        "sortOrder",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -144,6 +433,38 @@
     "/users/{userId}/projects/{projectId}": {
       "schema": { "$ref": "#/entities/Project" },
       "description": "User projects, phases, vendors, and payments"
+    },
+    "/workspaces/{workspaceId}": {
+      "schema": { "$ref": "#/entities/Workspace" },
+      "description": "Shared family workspace metadata and member roster"
+    },
+    "/workspaces/{workspaceId}/expenses/{sharedExpenseId}": {
+      "schema": { "$ref": "#/entities/SharedExpense" },
+      "description": "Shared expenses visible to current workspace members (or retained read-only for departed contributors)"
+    },
+    "/workspaces/{workspaceId}/vehicles/{sharedVehicleId}": {
+      "schema": { "$ref": "#/entities/SharedVehicle" },
+      "description": "Shared vehicles visible to workspace members and retained read-only for past contributors"
+    },
+    "/workspaces/{workspaceId}/projects/{sharedProjectId}": {
+      "schema": { "$ref": "#/entities/SharedProject" },
+      "description": "Shared projects visible to workspace members and retained read-only for past contributors"
+    },
+    "/workspaces/{workspaceId}/projectContributions/{contributionId}": {
+      "schema": { "$ref": "#/entities/SharedProjectContribution" },
+      "description": "Contributions by workspace members to shared projects"
+    },
+    "/workspaces/{workspaceId}/bills/{sharedBillId}": {
+      "schema": { "$ref": "#/entities/SharedBill" },
+      "description": "Shared bill reminders visible to current workspace members"
+    },
+    "/workspaces/{workspaceId}/categories/{sharedCategoryId}": {
+      "schema": { "$ref": "#/entities/SharedCategory" },
+      "description": "Shared categories and subcategories visible to current workspace members"
+    },
+    "/workspaceInvites/{inviteCode}": {
+      "schema": { "$ref": "#/entities/WorkspaceInvite" },
+      "description": "Invite lookup tokens for joining a family workspace"
     }
   }
 }

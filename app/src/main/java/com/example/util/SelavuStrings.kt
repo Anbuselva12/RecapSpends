@@ -82,7 +82,14 @@ data class SelavuStrings(
     val languageLabel: String,
     val budgetLabel: String,
     val caExportNotice: String,
-    val allUpToDate: String
+    val allUpToDate: String,
+    val reviewAlerts: String,
+    val familyWorkspace: String,
+    val scopeIndividual: String,
+    val scopeWorkspace: String,
+    val filterAllShared: String,
+    val filterOthersOnly: String,
+    val filterMineShared: String
 )
 
 val EnglishStrings = SelavuStrings(
@@ -162,7 +169,14 @@ val EnglishStrings = SelavuStrings(
     languageLabel = "Language",
     budgetLabel = "Monthly budget",
     caExportNotice = "Export CSV / GST summary for CA",
-    allUpToDate = "All up to date"
+    allUpToDate = "All up to date",
+    reviewAlerts = "Review alerts",
+    familyWorkspace = "Family Workspace",
+    scopeIndividual = "Individual",
+    scopeWorkspace = "Family Workspace",
+    filterAllShared = "All shared",
+    filterOthersOnly = "Others only",
+    filterMineShared = "Mine shared"
 )
 
 val TamilStrings = SelavuStrings(
@@ -242,7 +256,14 @@ val TamilStrings = SelavuStrings(
     languageLabel = "மொழி",
     budgetLabel = "மாத பட்ஜெட்",
     caExportNotice = "CA-க்கு GST அறிக்கை ஏற்றுமதி",
-    allUpToDate = "அனைத்தும் சரியாக உள்ளன"
+    allUpToDate = "அனைத்தும் சரியாக உள்ளன",
+    reviewAlerts = "அறிவிப்பு சரிபார்ப்பு",
+    familyWorkspace = "குடும்ப பணியிடம்",
+    scopeIndividual = "தனிப்பட்ட",
+    scopeWorkspace = "குடும்பம்",
+    filterAllShared = "அனைத்தும்",
+    filterOthersOnly = "மற்றவர்கள் மட்டும்",
+    filterMineShared = "என் பகிர்வு"
 )
 
 val LocalSelavuStrings = staticCompositionLocalOf { EnglishStrings }

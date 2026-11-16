@@ -19,7 +19,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.DocumentScanner
@@ -27,31 +27,43 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.data.model.AttentionAlert
 import com.example.data.model.Category
 import com.example.data.model.Expense
+import com.example.data.model.ExpenseScope
+import com.example.data.model.SharedExpense
+import com.example.data.model.Workspace
+import com.example.data.model.WorkspaceExpenseFilter
 import com.example.ui.components.CategoryShareSlice
 import com.example.ui.components.CategoryStackedBar
 import com.example.ui.components.CategoryTile
 import com.example.ui.components.SectionHeader
 import com.example.ui.components.SelavuCard
 import com.example.ui.components.SelavuDivider
+import com.example.ui.components.SelavuEmptyState
 import com.example.ui.components.SelavuListContainer
+import com.example.ui.components.SelavuMainHeader
 import com.example.ui.components.SelavuProgressBar
+import com.example.ui.components.SelavuSegmentedControl
 import com.example.ui.components.StatusPill
 import com.example.ui.theme.SelavuTheme
 import com.example.util.IndianFormatters
@@ -64,6 +76,12 @@ fun HomeScreen(
     categories: List<Category>,
     expenses: List<Expense>,
     alerts: List<AttentionAlert>,
+    userDisplayName: String? = null,
+    userPhotoUrl: String? = null,
+    currentUid: String = "",
+    reviewDraftCount: Int = 0,
+    workspace: Workspace? = null,
+    sharedExpenses: List<SharedExpense> = emptyList(),
     onOpenCategories: () -> Unit,
     onOpenScan: () -> Unit,
     onOpenAddExpense: () -> Unit,
@@ -74,11 +92,31 @@ fun HomeScreen(
     onOpenInsights: () -> Unit,
     onOpenActivity: () -> Unit,
     onOpenExpenseDetail: (Expense) -> Unit,
-    onEditBudget: () -> Unit
+    onEditBudget: () -> Unit,
+    onOpenReview: () -> Unit = {},
+    onOpenWorkspace: () -> Unit = {},
+    onOpenSharedExpenseDetail: (SharedExpense) -> Unit = {}
 ) {
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
+    val extendedColors = SelavuTheme.extendedColors
     val strings = selavuStrings()
     val nowMs = remember { System.currentTimeMillis() }
+
+    var scopeName by rememberSaveable { mutableStateOf(ExpenseScope.INDIVIDUAL.name) }
+    var wsFilterName by rememberSaveable { mutableStateOf(WorkspaceExpenseFilter.ALL.name) }
+
+    LaunchedEffect(workspace) {
+        if (workspace == null) {
+            scopeName = ExpenseScope.INDIVIDUAL.name
+        }
+    }
+    val scope = if (workspace != null && scopeName == ExpenseScope.WORKSPACE.name) {
+        ExpenseScope.WORKSPACE
+    } else {
+        ExpenseScope.INDIVIDUAL
+    }
+    val wsFilter = WorkspaceExpenseFilter.entries.firstOrNull { it.name == wsFilterName }
+        ?: WorkspaceExpenseFilter.ALL
 
     val monthExpenses = remember(expenses, nowMs) {
         expenses.filter { IndianFormatters.isSameMonth(it.dateEpochMs, nowMs) }
@@ -118,56 +156,82 @@ fun HomeScreen(
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 104.dp)
         ) {
             item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text(
-                            text = IndianFormatters.fullMonthHeader(nowMs),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = colors.ink3
-                        )
-                        Text(
-                            text = strings.goodEvening,
-                            style = MaterialTheme.typography.headlineLarge,
-                            color = colors.ink
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .size(44.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(colors.surface)
-                            .border(1.dp, colors.line, RoundedCornerShape(14.dp))
-                            .clickable(onClick = onOpenCategories)
-                            .testTag("home_settings_button"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.AccountCircle,
-                            contentDescription = "Profile and settings",
-                            tint = colors.ink,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
+                SelavuMainHeader(
+                    title = strings.goodEvening,
+                    subtitle = IndianFormatters.fullMonthHeader(nowMs),
+                    userDisplayName = userDisplayName,
+                    userPhotoUrl = userPhotoUrl,
+                    onOpenProfile = onOpenCategories,
+                    profileTestTag = "home_settings_button"
+                )
+            }
+
+            if (reviewDraftCount > 0) {
+                item {
+                    ReviewQueueBanner(
+                        draftCount = reviewDraftCount,
+                        onOpenReview = onOpenReview
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
                 }
             }
 
+            if (workspace != null) {
+                item {
+                    SelavuSegmentedControl(
+                        options = listOf(
+                            ExpenseScope.INDIVIDUAL.name to strings.scopeIndividual,
+                            ExpenseScope.WORKSPACE.name to workspace.name
+                        ),
+                        selectedKey = scope.name,
+                        onSelect = { scopeName = it },
+                        modifier = Modifier.testTag("home_scope_selector")
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
+            }
+
+            if (scope == ExpenseScope.WORKSPACE && workspace != null) {
+                item {
+                    WorkspaceHomeContent(
+                        currentUid = currentUid,
+                        workspace = workspace,
+                        sharedExpenses = sharedExpenses,
+                        filter = wsFilter,
+                        onSelectFilter = { wsFilterName = it.name },
+                        onOpenWorkspaceSettings = onOpenWorkspace,
+                        onOpenAllActivity = onOpenActivity,
+                        onOpenSharedDetail = onOpenSharedExpenseDetail
+                    )
+                }
+            } else {
             // Monthly Spend Hero Card
             item {
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(4.dp))
+                val heroFg = colorScheme.onSecondary
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(26.dp))
-                        .background(colors.hero)
+                        .clip(MaterialTheme.shapes.extraLarge)
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(colorScheme.secondary, colorScheme.primary)
+                            )
+                        )
+                        .drawBehind {
+                            drawCircle(
+                                color = heroFg.copy(alpha = 0.08f),
+                                radius = size.height * 0.62f,
+                                center = Offset(size.width * 0.92f, size.height * 0.16f)
+                            )
+                            drawCircle(
+                                color = heroFg.copy(alpha = 0.05f),
+                                radius = size.height * 0.36f,
+                                center = Offset(size.width * 0.12f, size.height * 0.96f)
+                            )
+                        }
                         .clickable(onClick = onEditBudget)
-                        .padding(18.dp)
+                        .padding(20.dp)
                         .testTag("home_hero_card")
                 ) {
                     Row(
@@ -177,19 +241,19 @@ fun HomeScreen(
                     ) {
                         Text(
                             text = strings.monthSoFar,
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                            color = colors.heroFg.copy(alpha = 0.82f)
+                            style = MaterialTheme.typography.labelLarge,
+                            color = heroFg.copy(alpha = 0.85f)
                         )
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(99.dp))
-                                .background(Color.White.copy(alpha = 0.16f))
+                                .background(heroFg.copy(alpha = 0.18f))
                                 .padding(horizontal = 10.dp, vertical = 4.dp)
                         ) {
                             Text(
                                 text = "$daysLeft ${strings.daysLeft}",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = colors.heroFg
+                                color = heroFg
                             )
                         }
                     }
@@ -197,14 +261,14 @@ fun HomeScreen(
                     Text(
                         text = IndianFormatters.formatInr(monthTotal),
                         style = MaterialTheme.typography.displayLarge,
-                        color = colors.heroFg,
-                        modifier = Modifier.padding(top = 6.dp, bottom = 14.dp)
+                        color = heroFg,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 14.dp)
                     )
 
                     SelavuProgressBar(
                         progress = if (monthlyBudget > 0) (monthTotal / monthlyBudget).toFloat() else 0f,
-                        color = Color.White,
-                        trackColor = Color.White.copy(alpha = 0.22f),
+                        color = heroFg,
+                        trackColor = heroFg.copy(alpha = 0.24f),
                         height = 8.dp
                     )
 
@@ -218,12 +282,12 @@ fun HomeScreen(
                         Text(
                             text = "${IndianFormatters.formatInr(remaining)} ${strings.leftOf} ${IndianFormatters.formatInr(monthlyBudget)}",
                             style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                            color = colors.heroFg.copy(alpha = 0.9f)
+                            color = heroFg.copy(alpha = 0.92f)
                         )
                         Text(
                             text = "$percentUsed${strings.usedPercent}",
-                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                            color = colors.heroFg.copy(alpha = 0.95f)
+                            style = MaterialTheme.typography.labelMedium,
+                            color = heroFg
                         )
                     }
                 }
@@ -263,6 +327,12 @@ fun HomeScreen(
                         modifier = Modifier.weight(1f).testTag("qa_new_reminder")
                     )
                 }
+                HomeDiscoveryStrip(
+                    reviewDraftCount = reviewDraftCount,
+                    workspace = workspace,
+                    onOpenReview = onOpenReview,
+                    onOpenWorkspace = onOpenWorkspace
+                )
             }
 
             // Needs attention
@@ -277,7 +347,7 @@ fun HomeScreen(
                         Text(
                             text = strings.allUpToDate,
                             style = MaterialTheme.typography.bodyMedium,
-                            color = colors.ok
+                            color = extendedColors.ok
                         )
                     }
                 } else {
@@ -300,7 +370,7 @@ fun HomeScreen(
                                 Text(
                                     text = alert.title,
                                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = colors.ink,
+                                    color = colorScheme.onSurface,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f)
@@ -344,20 +414,20 @@ fun HomeScreen(
                                                         modifier = Modifier
                                                             .size(9.dp)
                                                             .clip(RoundedCornerShape(3.dp))
-                                                            .background(colors.categoryColor(slice.colorIndex))
+                                                            .background(extendedColors.categoryColor(slice.colorIndex))
                                                     )
                                                     Text(
                                                         text = slice.name.substringBefore(" & "),
                                                         style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                                                        color = colors.ink2,
+                                                        color = colorScheme.onSurfaceVariant,
                                                         maxLines = 1,
                                                         overflow = TextOverflow.Ellipsis,
                                                         modifier = Modifier.weight(1f)
                                                     )
                                                     Text(
                                                         text = "$share%",
-                                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.ExtraBold),
-                                                        color = colors.ink
+                                                        style = SelavuTheme.textStyles.numericCaption,
+                                                        color = colorScheme.onSurface
                                                     )
                                                 }
                                             } else {
@@ -379,15 +449,16 @@ fun HomeScreen(
                     actionLabel = strings.seeAll,
                     onAction = onOpenActivity
                 )
-                SelavuListContainer {
-                    if (recentExpenses.isEmpty()) {
-                        Text(
-                            text = "No expenses logged yet. Tap Add or Scan bill to start fresh.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = colors.ink2,
-                            modifier = Modifier.padding(16.dp)
-                        )
-                    } else {
+                if (recentExpenses.isEmpty()) {
+                    SelavuEmptyState(
+                        icon = Icons.Filled.AccountBalanceWallet,
+                        title = "No expenses logged yet",
+                        subtitle = "Tap Add expense or Scan bill with AI to record your first transaction.",
+                        actionLabel = strings.addExpense,
+                        onAction = onOpenAddExpense
+                    )
+                } else {
+                    SelavuListContainer {
                         recentExpenses.forEachIndexed { idx, expense ->
                             if (idx > 0) SelavuDivider()
                             ExpenseRowItem(
@@ -398,6 +469,7 @@ fun HomeScreen(
                         }
                     }
                 }
+            }
             }
         }
     }
@@ -412,19 +484,17 @@ private fun QuickActionTile(
     isHot: Boolean = false,
     badge: String? = null
 ) {
-    val colors = SelavuTheme.colors
-    val bg = if (isHot) colors.accentSoft else colors.surface
-    val fg = if (isHot) colors.accentInk else colors.ink
+    val colorScheme = MaterialTheme.colorScheme
+    val bg = if (isHot) colorScheme.primaryContainer else colorScheme.surface
+    val fg = if (isHot) colorScheme.onPrimaryContainer else colorScheme.onSurface
+    val borderColor = if (isHot) colorScheme.primary.copy(alpha = 0.35f) else colorScheme.outlineVariant
     Box(modifier = modifier) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
+                .clip(MaterialTheme.shapes.medium)
                 .background(bg)
-                .then(
-                    if (!isHot) Modifier.border(1.dp, colors.line, RoundedCornerShape(16.dp))
-                    else Modifier
-                )
+                .border(1.dp, borderColor, MaterialTheme.shapes.medium)
                 .clickable(onClick = onClick)
                 .padding(vertical = 12.dp, horizontal = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -438,7 +508,7 @@ private fun QuickActionTile(
             )
             Text(
                 text = label,
-                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                style = MaterialTheme.typography.labelSmall,
                 color = fg,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -451,13 +521,13 @@ private fun QuickActionTile(
                     .align(Alignment.TopEnd)
                     .offset(x = (-4).dp, y = (-6).dp)
                     .clip(RoundedCornerShape(99.dp))
-                    .background(colors.accent)
+                    .background(colorScheme.primary)
                     .padding(horizontal = 6.dp, vertical = 2.dp)
             ) {
                 Text(
                     text = badge,
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
-                    color = colors.onAccent
+                    style = SelavuTheme.textStyles.badgeMicro,
+                    color = colorScheme.onPrimary
                 )
             }
         }
@@ -470,7 +540,7 @@ fun ExpenseRowItem(
     category: Category?,
     onClick: () -> Unit
 ) {
-    val colors = SelavuTheme.colors
+    val colorScheme = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -487,25 +557,22 @@ fun ExpenseRowItem(
             Text(
                 text = expense.title,
                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                color = colors.ink,
+                color = colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
             Text(
                 text = "${category?.name ?: "Other"} · ${IndianFormatters.formatShortDate(expense.dateEpochMs)}",
                 style = MaterialTheme.typography.bodySmall,
-                color = colors.ink2,
+                color = colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
         }
         Text(
             text = IndianFormatters.formatInr(expense.amount),
-            style = MaterialTheme.typography.bodyMedium.copy(
-                fontWeight = FontWeight.ExtraBold,
-                fontFeatureSettings = "tnum"
-            ),
-            color = colors.ink
+            style = SelavuTheme.textStyles.numericBody,
+            color = colorScheme.onSurface
         )
     }
 }
