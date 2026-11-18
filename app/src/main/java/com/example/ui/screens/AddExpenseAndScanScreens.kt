@@ -95,6 +95,7 @@ import com.example.data.model.Vehicle
 import com.example.ui.components.SelavuCard
 import com.example.ui.components.SelavuDivider
 import com.example.ui.components.SelavuFilterChip
+import com.example.ui.components.SelavuSegmentedControl
 import com.example.ui.components.SelavuTextField
 import com.example.ui.components.SelavuTopNavBar
 import com.example.ui.components.StatusPill
@@ -146,11 +147,27 @@ fun AddExpenseScreen(
         return if (value % 1.0 == 0.0) value.toInt().toString() else "%.2f".format(value)
     }
 
-    val defaultCatId = editingExpense?.categoryId?.takeIf { id -> categories.any { it.id == id } }
-        ?: initialCategoryId?.takeIf { id -> categories.any { it.id == id } }
-        ?: categories.firstOrNull()?.id ?: "groc"
+    var entryType by rememberSaveable(editKey) { mutableStateOf(editingExpense?.entryType ?: "expense") }
+    val effectiveCategories = remember(categories, entryType) {
+        if (entryType == "income" && categories.none { it.id == "inc" }) {
+            categories + Category(
+                id = "inc",
+                name = "Income",
+                iconKey = "rupee",
+                colorIndex = 4,
+                subcategories = listOf("Salary", "Business / Freelance", "Refund & cashback", "Interest & dividend", "Rental & other"),
+                sortOrder = 99
+            )
+        } else {
+            categories
+        }
+    }
+
+    val defaultCatId = editingExpense?.categoryId?.takeIf { id -> effectiveCategories.any { it.id == id } }
+        ?: initialCategoryId?.takeIf { id -> effectiveCategories.any { it.id == id } }
+        ?: effectiveCategories.firstOrNull()?.id ?: "groc"
     var selectedCatId by rememberSaveable(editKey) { mutableStateOf(defaultCatId) }
-    val selectedCategory = categories.firstOrNull { it.id == selectedCatId } ?: categories.firstOrNull()
+    val selectedCategory = effectiveCategories.firstOrNull { it.id == selectedCatId } ?: effectiveCategories.firstOrNull()
 
     var selectedSub by rememberSaveable(editKey) {
         mutableStateOf(
@@ -160,19 +177,19 @@ fun AddExpenseScreen(
         )
     }
 
-    LaunchedEffect(categories, editKey) {
-        if (categories.isNotEmpty() && categories.none { it.id == selectedCatId }) {
+    LaunchedEffect(effectiveCategories, editKey) {
+        if (effectiveCategories.isNotEmpty() && effectiveCategories.none { it.id == selectedCatId }) {
             val editCat = editingExpense?.categoryId
-            selectedCatId = if (editCat != null && categories.any { it.id == editCat }) {
+            selectedCatId = if (editCat != null && effectiveCategories.any { it.id == editCat }) {
                 editCat
             } else {
-                categories.first().id
+                effectiveCategories.first().id
             }
         }
     }
 
-    LaunchedEffect(selectedCatId, categories) {
-        val subs = categories.firstOrNull { it.id == selectedCatId }?.subcategories.orEmpty()
+    LaunchedEffect(selectedCatId, effectiveCategories) {
+        val subs = effectiveCategories.firstOrNull { it.id == selectedCatId }?.subcategories.orEmpty()
         if (subs.isNotEmpty() && selectedSub !in subs &&
             (editingExpense == null || selectedCatId != editingExpense.categoryId || selectedSub.isBlank())
         ) {
@@ -246,7 +263,7 @@ fun AddExpenseScreen(
         }
     }
 
-    val isVehicleCategory = selectedCatId == "veh" && vehicles.isNotEmpty()
+    val isVehicleCategory = selectedCatId == "veh" && vehicles.isNotEmpty() && entryType != "income"
     val isVehicleService = isVehicleCategory && selectedSub.equals("Service", ignoreCase = true)
     val isVehicleFuel = isVehicleCategory && selectedSub.equals("Fuel", ignoreCase = true)
 
@@ -298,10 +315,15 @@ fun AddExpenseScreen(
         ) {
             item {
                 SelavuTopNavBar(
-                    title = if (isEditMode) "Edit expense" else strings.addExpense,
+                    title = when {
+                        isEditMode && entryType == "income" -> "Edit income"
+                        isEditMode -> "Edit expense"
+                        entryType == "income" -> strings.addIncome
+                        else -> strings.addExpense
+                    },
                     onBack = onBack,
                     trailing = {
-                        if (!isEditMode) {
+                        if (!isEditMode && entryType != "income") {
                             SelavuFilterChip(
                                 label = strings.scanInstead,
                                 selected = true,
@@ -311,6 +333,30 @@ fun AddExpenseScreen(
                             )
                         }
                     }
+                )
+            }
+
+            item {
+                SelavuSegmentedControl(
+                    options = listOf("expense" to "Expense", "income" to "Income"),
+                    selectedKey = entryType,
+                    onSelect = { next ->
+                        entryType = next
+                        if (next == "income") {
+                            val inc = effectiveCategories.firstOrNull { it.id == "inc" }
+                            if (inc != null) {
+                                selectedCatId = inc.id
+                                selectedSub = inc.subcategories.firstOrNull().orEmpty()
+                            }
+                        } else if (selectedCatId == "inc") {
+                            val firstNonInc = effectiveCategories.firstOrNull { it.id != "inc" }
+                            if (firstNonInc != null) {
+                                selectedCatId = firstNonInc.id
+                                selectedSub = firstNonInc.subcategories.firstOrNull().orEmpty()
+                            }
+                        }
+                    },
+                    modifier = Modifier.testTag("entry_type_selector")
                 )
             }
 
@@ -366,8 +412,12 @@ fun AddExpenseScreen(
                         SelavuTextField(
                             value = titleText,
                             onValueChange = { titleText = it },
-                            label = strings.whatWasItFor,
-                            placeholder = "e.g. Reliance Fresh, Sri Vel Garage, TNEB",
+                            label = if (entryType == "income") "Income source" else strings.whatWasItFor,
+                            placeholder = if (entryType == "income") {
+                                "e.g. Monthly salary, Client invoice, Cashback"
+                            } else {
+                                "e.g. Reliance Fresh, Sri Vel Garage, TNEB"
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("expense_title_input")
@@ -381,7 +431,7 @@ fun AddExpenseScreen(
                 SelavuCard {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(strings.category, style = MaterialTheme.typography.labelLarge, color = colorScheme.onSurface)
-                        if (categories.isEmpty()) {
+                        if (effectiveCategories.isEmpty()) {
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text(
                                     text = "No categories yet after clearing data. Restore default Indian categories or log under General.",
@@ -401,7 +451,7 @@ fun AddExpenseScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                categories.forEach { cat ->
+                                effectiveCategories.forEach { cat ->
                                     SelavuFilterChip(
                                         label = cat.name.substringBefore(" & "),
                                         selected = selectedCatId == cat.id,
@@ -602,7 +652,11 @@ fun AddExpenseScreen(
 
                         SelavuDivider()
 
-                        Text(strings.paidWith, style = MaterialTheme.typography.labelLarge, color = colorScheme.onSurface)
+                        Text(
+                            if (entryType == "income") "Received via" else strings.paidWith,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = colorScheme.onSurface
+                        )
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -733,7 +787,7 @@ fun AddExpenseScreen(
                                     text = if (selectedCategory?.hiddenFromWorkspace == true) {
                                         "This entire category is already hidden from your workspace."
                                     } else {
-                                        "Private entries stay only in your Individual account."
+                                        "Private entries (${if (entryType == "income") "income" else "expenses"}) stay only in your Individual account."
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = colorScheme.onSurfaceVariant
@@ -775,6 +829,7 @@ fun AddExpenseScreen(
 
                         val finalTitle = titleText.trim().ifBlank {
                             when {
+                                entryType == "income" -> selectedSub.ifBlank { "Income" }
                                 isVehicleService && selectedVehicle != null -> "${selectedVehicle.shortName} service"
                                 isVehicleFuel && selectedVehicle != null -> "${selectedVehicle.shortName} fuel"
                                 else -> selectedSub.ifBlank { selectedCategory?.name ?: "Expense" }
@@ -803,6 +858,7 @@ fun AddExpenseScreen(
                                 categoryId = selectedCatId,
                                 subcategory = selectedSub,
                                 paymentMode = paymentMode,
+                                entryType = entryType,
                                 projectId = project?.id,
                                 vehicleId = vehicle?.id,
                                 isPrivate = isPrivate,
@@ -832,7 +888,11 @@ fun AddExpenseScreen(
                         CircularProgressIndicator(modifier = Modifier.size(20.dp), color = colorScheme.onPrimary, strokeWidth = 2.dp)
                     } else {
                         Text(
-                            text = if (isEditMode) "Save changes" else strings.saveExpense,
+                            text = when {
+                                isEditMode -> "Save changes"
+                                entryType == "income" -> strings.saveIncome
+                                else -> strings.saveExpense
+                            },
                             style = MaterialTheme.typography.titleMedium
                         )
                     }

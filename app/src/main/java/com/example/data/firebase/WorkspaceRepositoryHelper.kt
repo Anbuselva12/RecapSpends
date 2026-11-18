@@ -1379,6 +1379,7 @@ class WorkspaceRepositoryHelper(
             val cleanTitle = exp.title.ifBlank { "Expense" }.take(140)
             val cleanSub = exp.subcategory.take(80)
             val cleanMode = if (exp.paymentMode in listOf("UPI", "Cash", "Card", "Bank")) exp.paymentMode else "UPI"
+            val cleanEntryType = if (exp.entryType == "income") "income" else "expense"
 
             val rawVehId = exp.vehicleId?.takeIf { it.isNotBlank() }
             val myVeh = rawVehId?.let { myVehicleMap[it] }
@@ -1433,6 +1434,7 @@ class WorkspaceRepositoryHelper(
                     categoryColorIndex = catColor,
                     subcategory = cleanSub,
                     paymentMode = cleanMode,
+                    entryType = cleanEntryType,
                     sharedVehicleId = resolvedSharedVehId,
                     sharedVehicleOwnerUid = resolvedSharedVehOwner,
                     sharedProjectId = resolvedSharedProjId,
@@ -1455,6 +1457,7 @@ class WorkspaceRepositoryHelper(
                     existing.categoryColorIndex != catColor ||
                     existing.subcategory != cleanSub ||
                     existing.paymentMode != cleanMode ||
+                    existing.entryType != cleanEntryType ||
                     existing.sharedVehicleId != resolvedSharedVehId ||
                     existing.sharedVehicleOwnerUid != resolvedSharedVehOwner ||
                     existing.sharedProjectId != resolvedSharedProjId ||
@@ -1475,6 +1478,7 @@ class WorkspaceRepositoryHelper(
                         "categoryColorIndex" to catColor,
                         "subcategory" to cleanSub,
                         "paymentMode" to cleanMode,
+                        "entryType" to cleanEntryType,
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                     updates["sharedVehicleId"] = resolvedSharedVehId ?: FieldValue.delete()

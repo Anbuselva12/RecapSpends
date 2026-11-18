@@ -496,61 +496,61 @@ class SelavuViewModel(
         }
     }
 
-    // --- Read SMS (Today Onwards) & Device-Local Review Queue ---
+    // --- Read SMS (Current Date Only) & Device-Local Review Queue ---
 
     fun acceptSmsDisclosureAndEnable(context: Context) {
         viewModelScope.launch {
-            val sinceMs = draftStore.ensureSmsSinceEpochMs(currentUserId)
+            val todayStart = draftStore.ensureSmsSinceEpochMs(currentUserId)
             draftStore.setSmsEnabled(
                 uid = currentUserId,
                 enabled = true,
                 acceptedDisclosure = true,
-                sinceEpochMs = sinceMs
+                sinceEpochMs = todayStart
             )
             if (SmsExpenseReader.hasReadSmsPermission(context)) {
-                val added = SmsExpenseReader.syncInboxSince(context, currentUserId, sinceMs, draftStore)
+                val added = SmsExpenseReader.syncInboxSince(context, currentUserId, todayStart, draftStore)
                 showToast(
-                    if (added > 0) "SMS reader enabled · $added expense alerts queued from today"
-                    else "SMS auto-detect enabled from today onwards (OTPs ignored)"
+                    if (added > 0) "SMS reader enabled · $added transaction alerts queued for today"
+                    else "SMS auto-detect enabled for today (debits & credits; OTPs ignored)"
                 )
             } else {
-                showToast("SMS auto-detect enabled from today onwards (OTPs ignored)")
+                showToast("SMS auto-detect enabled for today (debits & credits; OTPs ignored)")
             }
         }
     }
 
     fun setSmsAutoReadEnabled(enabled: Boolean, context: Context) {
         viewModelScope.launch {
-            val sinceMs = draftStore.ensureSmsSinceEpochMs(currentUserId)
-            draftStore.setSmsEnabled(currentUserId, enabled = enabled, sinceEpochMs = sinceMs)
+            val todayStart = draftStore.ensureSmsSinceEpochMs(currentUserId)
+            draftStore.setSmsEnabled(currentUserId, enabled = enabled, sinceEpochMs = todayStart)
             if (enabled) {
                 if (SmsExpenseReader.hasReadSmsPermission(context)) {
-                    val added = SmsExpenseReader.syncInboxSince(context, currentUserId, sinceMs, draftStore)
+                    val added = SmsExpenseReader.syncInboxSince(context, currentUserId, todayStart, draftStore)
                     showToast(
                         if (added > 0) "SMS reader ON · $added alerts found today"
-                        else "SMS reader turned ON (today onwards · OTPs ignored)"
+                        else "SMS reader turned ON (today · debits & credits; OTPs ignored)"
                     )
                 } else {
                     showToast("SMS reader turned ON (grant READ_SMS permission to scan)")
                 }
             } else {
-                showToast("SMS expense reader paused")
+                showToast("SMS transaction reader paused")
             }
         }
     }
 
     fun syncTodaySms(context: Context, userTriggered: Boolean = false) {
         if (!SmsExpenseReader.hasReadSmsPermission(context)) {
-            if (userTriggered) showToast("Grant SMS permission first to read today's expense alerts")
+            if (userTriggered) showToast("Grant SMS permission first to read today's transaction alerts")
             return
         }
         viewModelScope.launch {
-            val sinceMs = draftStore.ensureSmsSinceEpochMs(currentUserId)
-            val added = SmsExpenseReader.syncInboxSince(context, currentUserId, sinceMs, draftStore)
+            val todayStart = draftStore.ensureSmsSinceEpochMs(currentUserId)
+            val added = SmsExpenseReader.syncInboxSince(context, currentUserId, todayStart, draftStore)
             if (added > 0) {
-                showToast("Queued $added new expense alert${if (added > 1) "s" else ""} from SMS")
+                showToast("Queued $added new alert${if (added > 1) "s" else ""} from today's SMS")
             } else if (userTriggered) {
-                showToast("No new expense SMS messages since ${IndianFormatters.formatDate(sinceMs)}")
+                showToast("No new transaction SMS found for today (${IndianFormatters.formatDate(todayStart)})")
             }
         }
     }
@@ -603,13 +603,17 @@ class SelavuViewModel(
                         )
                     }
                     .takeIf { it.isNotEmpty() }
+                val entryType = if (draft.entryType == "income") "income" else "expense"
                 val expense = Expense(
-                    title = draft.title.trim().ifBlank { "Notification expense" },
+                    title = draft.title.trim().ifBlank {
+                        if (entryType == "income") "SMS income" else "Notification expense"
+                    },
                     amount = draft.amount.coerceAtLeast(0.01),
                     dateEpochMs = draft.dateEpochMs,
-                    categoryId = draft.categoryId.ifBlank { "groc" },
+                    categoryId = draft.categoryId.ifBlank { if (entryType == "income") "inc" else "groc" },
                     subcategory = draft.subcategory,
                     paymentMode = draft.paymentMode,
+                    entryType = entryType,
                     projectId = selectedProject?.id,
                     vehicleId = selectedVehicle?.id,
                     isPrivate = draft.isPrivate,
@@ -627,7 +631,8 @@ class SelavuViewModel(
                 )
                 recordForeignContributionIfNeeded(ready, selectedVehicle, selectedProject, draft.isPrivate)
                 draftStore.removeDraft(currentUserId, draft.id)
-                showToast("Approved & saved ${IndianFormatters.formatInr(expense.amount)}")
+                val prefix = if (entryType == "income") "Income +" else ""
+                showToast("Approved & saved $prefix${IndianFormatters.formatInr(expense.amount)}")
                 onDone()
             } catch (e: CancellationException) {
                 throw e
@@ -854,7 +859,8 @@ class SelavuViewModel(
                 val extra = if (serviceItemIdsDone.isNotEmpty()) {
                     ". ${serviceItemIdsDone.size} tracker item${if (serviceItemIdsDone.size > 1) "s" else ""} reset"
                 } else ""
-                showToast("Saved ${IndianFormatters.formatInr(expense.amount)}$extra")
+                val prefix = if (expense.entryType == "income") "Income +" else ""
+                showToast("Saved $prefix${IndianFormatters.formatInr(expense.amount)}$extra")
                 onDone()
             } catch (e: CancellationException) {
                 throw e
@@ -889,7 +895,8 @@ class SelavuViewModel(
                     serviceItemIdsDone = serviceItemIdsDone
                 )
                 recordForeignContributionIfNeeded(ready, vehicleToReset, projectToCharge, expense.isPrivate)
-                showToast("Updated ${IndianFormatters.formatInr(expense.amount)}")
+                val prefix = if (expense.entryType == "income") "Income +" else ""
+                showToast("Updated $prefix${IndianFormatters.formatInr(expense.amount)}")
                 onDone()
             } catch (e: CancellationException) {
                 throw e
@@ -980,6 +987,34 @@ class SelavuViewModel(
         }
     }
 
+    fun recordLastServiceDone(
+        vehicle: Vehicle,
+        itemId: String,
+        doneDateEpochMs: Long,
+        doneKm: Int
+    ) {
+        val nowMs = System.currentTimeMillis()
+        val safeDateMs = doneDateEpochMs.coerceIn(0L, nowMs)
+        val safeKm = doneKm.coerceIn(0, 2_000_000)
+        val updatedItems = vehicle.items.map { item ->
+            if (item.id == itemId) {
+                item.copy(lastDoneEpochMs = safeDateMs, lastDoneKm = safeKm)
+            } else item
+        }
+        val target = updatedItems.firstOrNull { it.id == itemId } ?: return
+        val state = target.computeState(vehicle.odometer, nowMs)
+        viewModelScope.launch {
+            try {
+                repository.updateVehicle(vehicle.copy(items = updatedItems))
+                showToast("Last service updated for ${target.name} (${IndianFormatters.formatDate(safeDateMs)}). ${state.nextDueLabel}")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showToast(e.localizedMessage ?: "Failed to update last service")
+            }
+        }
+    }
+
     fun updateServiceItemInterval(vehicle: Vehicle, itemId: String, km: Int, months: Int) {
         val safeKm = km.coerceAtLeast(0)
         val safeMonths = if (safeKm == 0 && months <= 0) 12 else months.coerceAtLeast(1)
@@ -1014,14 +1049,16 @@ class SelavuViewModel(
 
     fun addServiceItem(vehicle: Vehicle, newItem: ServiceItem) {
         val nowMs = System.currentTimeMillis()
-        val itemWithToday = newItem.copy(
-            lastDoneEpochMs = nowMs,
-            lastDoneKm = vehicle.odometer
+        val effectiveDate = if (newItem.lastDoneEpochMs > 0L) newItem.lastDoneEpochMs.coerceAtMost(nowMs) else nowMs
+        val effectiveKm = if (newItem.lastDoneKm >= 0) newItem.lastDoneKm else vehicle.odometer
+        val itemToSave = newItem.copy(
+            lastDoneEpochMs = effectiveDate,
+            lastDoneKm = effectiveKm
         )
         viewModelScope.launch {
             try {
-                repository.updateVehicle(vehicle.copy(items = vehicle.items + itemWithToday))
-                showToast("${newItem.name} added. Tracking starts today.")
+                repository.updateVehicle(vehicle.copy(items = vehicle.items + itemToSave))
+                showToast("${newItem.name} added (${IndianFormatters.formatDate(effectiveDate)}).")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

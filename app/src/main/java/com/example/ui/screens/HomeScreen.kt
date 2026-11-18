@@ -121,14 +121,18 @@ fun HomeScreen(
     val monthExpenses = remember(expenses, nowMs) {
         expenses.filter { IndianFormatters.isSameMonth(it.dateEpochMs, nowMs) }
     }
-    val monthTotal = remember(monthExpenses) { monthExpenses.sumOf { it.amount } }
+    val monthSpend = remember(monthExpenses) { monthExpenses.filter { it.entryType != "income" } }
+    val monthIncome = remember(monthExpenses) { monthExpenses.filter { it.entryType == "income" } }
+    val monthTotal = remember(monthSpend) { monthSpend.sumOf { it.amount } }
+    val monthIncomeTotal = remember(monthIncome) { monthIncome.sumOf { it.amount } }
+    val monthNet = remember(monthIncomeTotal, monthTotal) { monthIncomeTotal - monthTotal }
     val percentUsed = remember(monthTotal, monthlyBudget) {
         if (monthlyBudget > 0) ((monthTotal / monthlyBudget) * 100.0).roundToInt().coerceAtMost(999) else 0
     }
     val daysLeft = remember(nowMs) { IndianFormatters.daysLeftInMonth(nowMs) }
 
-    val categorySlices = remember(monthExpenses, categories) {
-        val grouped = monthExpenses.groupBy { it.categoryId }
+    val categorySlices = remember(monthSpend, categories) {
+        val grouped = monthSpend.groupBy { it.categoryId }
         grouped.entries.map { (catId, list) ->
             val cat = categories.firstOrNull { it.id == catId }
             CategoryShareSlice(
@@ -262,8 +266,46 @@ fun HomeScreen(
                         text = IndianFormatters.formatInr(monthTotal),
                         style = MaterialTheme.typography.displayLarge,
                         color = heroFg,
-                        modifier = Modifier.padding(top = 8.dp, bottom = 14.dp)
+                        modifier = Modifier.padding(top = 8.dp, bottom = 10.dp)
                     )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(heroFg.copy(alpha = 0.14f))
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                            .testTag("home_hero_income_row"),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "INCOME THIS MONTH",
+                                style = SelavuTheme.textStyles.badgeMicro,
+                                color = heroFg.copy(alpha = 0.78f)
+                            )
+                            Text(
+                                text = "+${IndianFormatters.formatInr(monthIncomeTotal)}",
+                                style = SelavuTheme.textStyles.numericTitle,
+                                color = heroFg
+                            )
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = "NET CASHFLOW",
+                                style = SelavuTheme.textStyles.badgeMicro,
+                                color = heroFg.copy(alpha = 0.78f)
+                            )
+                            val netPrefix = if (monthNet > 0.0) "+" else if (monthNet < 0.0) "-" else ""
+                            Text(
+                                text = "$netPrefix${IndianFormatters.formatInr(kotlin.math.abs(monthNet))}",
+                                style = SelavuTheme.textStyles.numericTitle,
+                                color = heroFg
+                            )
+                        }
+                    }
 
                     SelavuProgressBar(
                         progress = if (monthlyBudget > 0) (monthTotal / monthlyBudget).toFloat() else 0f,
@@ -541,6 +583,9 @@ fun ExpenseRowItem(
     onClick: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val extendedColors = SelavuTheme.extendedColors
+    val isIncome = expense.entryType == "income"
+    val fallbackCatName = if (isIncome) "Income" else "Other"
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -550,8 +595,8 @@ fun ExpenseRowItem(
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         CategoryTile(
-            iconKey = category?.iconKey ?: "tag",
-            colorIndex = category?.colorIndex ?: 9
+            iconKey = category?.iconKey ?: if (isIncome) "rupee" else "tag",
+            colorIndex = category?.colorIndex ?: if (isIncome) 4 else 9
         )
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -561,8 +606,9 @@ fun ExpenseRowItem(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            val prefix = if (isIncome) "Income · " else ""
             Text(
-                text = "${category?.name ?: "Other"} · ${IndianFormatters.formatShortDate(expense.dateEpochMs)}",
+                text = "$prefix${category?.name ?: fallbackCatName} · ${IndianFormatters.formatShortDate(expense.dateEpochMs)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -570,9 +616,9 @@ fun ExpenseRowItem(
             )
         }
         Text(
-            text = IndianFormatters.formatInr(expense.amount),
+            text = if (isIncome) "+${IndianFormatters.formatInr(expense.amount)}" else IndianFormatters.formatInr(expense.amount),
             style = SelavuTheme.textStyles.numericBody,
-            color = colorScheme.onSurface
+            color = if (isIncome) extendedColors.ok else colorScheme.onSurface
         )
     }
 }

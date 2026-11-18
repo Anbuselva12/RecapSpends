@@ -4,7 +4,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -55,6 +54,7 @@ import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -85,6 +85,7 @@ import com.example.ui.components.SelavuCard
 import com.example.ui.components.SelavuDivider
 import com.example.ui.components.SelavuEmptyState
 import com.example.ui.components.SelavuFilterChip
+import com.example.ui.components.SelavuSegmentedControl
 import com.example.ui.components.SelavuTextField
 import com.example.ui.components.SelavuTopNavBar
 import com.example.ui.components.StatusPill
@@ -107,6 +108,7 @@ fun ReviewDraftsScreen(
     onAcceptDisclosureAndEnable: () -> Unit,
     onToggleSmsAutoRead: (Boolean) -> Unit,
     onSyncTodaySms: () -> Unit,
+    onAutoSyncTodaySms: () -> Unit = {},
     onUpdateDraft: (ReviewDraft) -> Unit,
     onApproveDraft: (ReviewDraft) -> Unit,
     onDeleteDraft: (String) -> Unit,
@@ -119,6 +121,9 @@ fun ReviewDraftsScreen(
 
     var smsPermissionGranted by remember {
         mutableStateOf(SmsExpenseReader.hasAllSmsPermissions(context))
+    }
+    var todayMs by remember(smsSinceEpochMs) {
+        mutableStateOf(maxOf(smsSinceEpochMs, System.currentTimeMillis()))
     }
 
     val smsPermissionLauncher = rememberLauncherForActivityResult(
@@ -134,10 +139,22 @@ fun ReviewDraftsScreen(
         }
     }
 
-    DisposableEffect(lifecycleOwner, context) {
+    LaunchedEffect(smsAutoReadEnabled, disclosureAccepted, smsPermissionGranted) {
+        todayMs = System.currentTimeMillis()
+        if (smsAutoReadEnabled && disclosureAccepted && SmsExpenseReader.hasReadSmsPermission(context)) {
+            onAutoSyncTodaySms()
+        }
+    }
+
+    DisposableEffect(lifecycleOwner, context, smsAutoReadEnabled, disclosureAccepted) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                smsPermissionGranted = SmsExpenseReader.hasAllSmsPermissions(context)
+                todayMs = System.currentTimeMillis()
+                val granted = SmsExpenseReader.hasAllSmsPermissions(context)
+                smsPermissionGranted = granted
+                if (smsAutoReadEnabled && disclosureAccepted && SmsExpenseReader.hasReadSmsPermission(context)) {
+                    onAutoSyncTodaySms()
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -149,7 +166,7 @@ fun ReviewDraftsScreen(
 
     if (showDisclosureDialog) {
         SmsDisclosureDialog(
-            sinceEpochMs = smsSinceEpochMs,
+            sinceEpochMs = todayMs,
             onDismiss = { showDisclosureDialog = false },
             onConfirm = {
                 showDisclosureDialog = false
@@ -206,7 +223,7 @@ fun ReviewDraftsScreen(
             // SMS Access & Privacy Control Card
             item {
                 val readGranted = smsPermissionGranted || SmsExpenseReader.hasReadSmsPermission(context)
-                val sinceLabel = IndianFormatters.formatDate(smsSinceEpochMs)
+                val todayLabel = IndianFormatters.formatDate(todayMs)
                 SelavuCard(modifier = Modifier.testTag("review_permission_card")) {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Row(
@@ -223,19 +240,19 @@ fun ReviewDraftsScreen(
                             ) {
                                 Icon(
                                     imageVector = Icons.Filled.Sms,
-                                    contentDescription = "Read SMS expense alerts",
+                                    contentDescription = "Read SMS transaction alerts",
                                     tint = colorScheme.onPrimaryContainer
                                 )
                             }
                             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                 Text(
-                                    text = "Read SMS expenses (today onwards)",
+                                    text = "Read SMS alerts (today · debits & credits)",
                                     style = MaterialTheme.typography.titleMedium,
                                     color = colorScheme.onSurface
                                 )
                                 Text(
                                     text = if (readGranted) {
-                                        "SMS permission granted · Reading from $sinceLabel onwards"
+                                        "SMS permission granted · Syncing today ($todayLabel)"
                                     } else {
                                         "Internal testing · SMS permission required (opt-in)"
                                     },
@@ -272,7 +289,7 @@ fun ReviewDraftsScreen(
                                 modifier = Modifier.size(16.dp).padding(top = 2.dp)
                             )
                             Text(
-                                text = "Reads new bank/UPI debit SMS messages from today ($sinceLabel) onwards only. OTPs, verification codes, and non-spend alerts are ignored immediately in memory. Drafts stay device-local (preserved across sign out) until approved.",
+                                text = "Syncs only today's ($todayLabel) bank/UPI debit and credit SMS messages. Credits are tagged as Income; OTPs and non-transaction alerts are ignored immediately in memory. Drafts stay device-local until approved.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = colorScheme.onSurfaceVariant
                             )
@@ -308,7 +325,7 @@ fun ReviewDraftsScreen(
                             ) {
                                 Icon(Icons.Filled.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Sync SMS from $sinceLabel onwards")
+                                Text("Refresh today's SMS ($todayLabel)")
                             }
                         }
                     }
@@ -324,16 +341,17 @@ fun ReviewDraftsScreen(
                     val readGranted = smsPermissionGranted || SmsExpenseReader.hasReadSmsPermission(context)
                     SelavuEmptyState(
                         icon = Icons.Filled.NotificationsActive,
-                        title = "No pending expense drafts",
+                        title = "No pending transaction drafts",
                         subtitle = if (smsAutoReadEnabled && readGranted) {
-                            "New bank or UPI debit SMS messages from today onwards will appear here so you can categorize, add items, and approve them."
+                            "New bank or UPI debit and credit SMS messages for today will appear here so you can review, categorize, and approve them."
                         } else {
-                            "Enable Read SMS above to queue new bank or UPI spend SMS alerts from today onwards for review."
+                            "Enable Read SMS above to queue today's bank or UPI debit and credit SMS alerts for review."
                         }
                     )
                 }
             } else {
                 items(drafts, key = { it.id }) { draft ->
+                    val isIncome = draft.entryType == "income"
                     val cat = categories.firstOrNull { it.id == draft.categoryId }
                     SelavuCard(
                         onClick = { editingDraft = draft },
@@ -346,8 +364,8 @@ fun ReviewDraftsScreen(
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 CategoryTile(
-                                    iconKey = cat?.iconKey ?: "tag",
-                                    colorIndex = cat?.colorIndex ?: 9
+                                    iconKey = cat?.iconKey ?: if (isIncome) "rupee" else "tag",
+                                    colorIndex = cat?.colorIndex ?: if (isIncome) 4 else 9
                                 )
                                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                     Text(
@@ -357,7 +375,7 @@ fun ReviewDraftsScreen(
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
-                                    val catLabel = cat?.name ?: "Other"
+                                    val catLabel = cat?.name ?: if (isIncome) "Income" else "Other"
                                     val subLabel = draft.subcategory.takeIf { it.isNotBlank() }?.let { " › $it" }.orEmpty()
                                     Text(
                                         text = "$catLabel$subLabel · ${draft.paymentMode}",
@@ -369,9 +387,9 @@ fun ReviewDraftsScreen(
                                 }
                                 Column(horizontalAlignment = Alignment.End) {
                                     Text(
-                                        text = IndianFormatters.formatInr(draft.amount),
+                                        text = if (isIncome) "+${IndianFormatters.formatInr(draft.amount)}" else IndianFormatters.formatInr(draft.amount),
                                         style = SelavuTheme.textStyles.numericTitle,
-                                        color = colorScheme.onSurface
+                                        color = if (isIncome) extendedColors.ok else colorScheme.onSurface
                                     )
                                     Text(
                                         text = IndianFormatters.formatShortDate(draft.dateEpochMs),
@@ -402,6 +420,9 @@ fun ReviewDraftsScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 StatusPill(text = draft.sourceLabel, status = ServiceStatus.OK)
+                                if (isIncome) {
+                                    StatusPill(text = "Income", status = ServiceStatus.OK)
+                                }
                                 val draftVeh = draft.vehicleId?.let { vid -> vehicles.firstOrNull { it.id == vid } }
                                 val draftProj = draft.projectId?.let { pid -> projects.firstOrNull { it.id == pid } }
                                 if (draftVeh != null) {
@@ -482,11 +503,11 @@ private fun SmsDisclosureDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "RecapSpends uses Read SMS permission (internal testing opt-in) only to detect bank & UPI spend SMS messages from today ($sinceLabel) onwards.",
+                    text = "RecapSpends uses Read SMS permission (internal testing opt-in) only to detect bank & UPI debit and credit SMS messages for the current date ($sinceLabel).",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    text = "• SMS messages before $sinceLabel are skipped.\n• OTPs, verification codes, and non-spend alerts are ignored immediately in memory without storing or uploading.\n• Drafts remain device-local (even across sign-out) until you edit and approve them.",
+                    text = "• Only SMS messages from today ($sinceLabel) are refreshed — never older history.\n• Credit alerts are tagged as Income; debits are tagged as Expenses.\n• OTPs, verification codes, and non-transaction alerts are ignored immediately in memory.\n• Drafts remain device-local until you edit and approve them.",
                     style = MaterialTheme.typography.bodySmall,
                     color = colorScheme.onSurfaceVariant
                 )
@@ -532,6 +553,7 @@ private fun ReviewDraftEditorSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val nowMs = remember { System.currentTimeMillis() }
 
+    var entryType by remember(draft.id) { mutableStateOf(draft.entryType.ifBlank { "expense" }) }
     var title by remember(draft.id) { mutableStateOf(draft.title) }
     var amountText by remember(draft.id) {
         mutableStateOf(
@@ -605,6 +627,7 @@ private fun ReviewDraftEditorSheet(
             amount = amt,
             dateEpochMs = dateEpochMs,
             paymentMode = paymentMode,
+            entryType = entryType,
             categoryId = categoryId,
             subcategory = subcategory,
             vehicleId = selectedVehicleId,
@@ -650,7 +673,30 @@ private fun ReviewDraftEditorSheet(
                 .padding(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text("Review & map expense", style = MaterialTheme.typography.headlineMedium)
+            Text(
+                if (entryType == "income") "Review & map income" else "Review & map expense",
+                style = MaterialTheme.typography.headlineMedium
+            )
+
+            SelavuSegmentedControl(
+                options = listOf("expense" to "Expense", "income" to "Income"),
+                selectedKey = entryType,
+                onSelect = { next ->
+                    entryType = next
+                    if (next == "income") {
+                        categories.firstOrNull { it.id == "inc" }?.let { inc ->
+                            categoryId = inc.id
+                            subcategory = inc.subcategories.firstOrNull().orEmpty()
+                        }
+                    } else if (categoryId == "inc") {
+                        categories.firstOrNull { it.id != "inc" }?.let { expCat ->
+                            categoryId = expCat.id
+                            subcategory = expCat.subcategories.firstOrNull().orEmpty()
+                        }
+                    }
+                },
+                modifier = Modifier.testTag("review_edit_entry_type")
+            )
 
             if (draft.snippet.isNotBlank()) {
                 Text(
@@ -668,7 +714,7 @@ private fun ReviewDraftEditorSheet(
             SelavuTextField(
                 value = title,
                 onValueChange = { title = it },
-                label = "Merchant / Title",
+                label = if (entryType == "income") "Income source / Title" else "Merchant / Title",
                 modifier = Modifier.fillMaxWidth().testTag("review_edit_title")
             )
 
@@ -885,12 +931,17 @@ private fun ReviewDraftEditorSheet(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Hide from Family Workspace", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
-                        Text("Keep this expense private to you", style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
+                        Text(
+                            "Keep this ${if (entryType == "income") "income" else "expense"} private to you",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
                     }
                     Switch(
                         checked = isPrivate,
                         onCheckedChange = { isPrivate = it },
-                        colors = SwitchDefaults.colors(checkedTrackColor = colorScheme.primary)
+                        colors = SwitchDefaults.colors(checkedTrackColor = colorScheme.primary),
+                        modifier = Modifier.testTag("review_edit_private_switch")
                     )
                 }
             }
@@ -908,7 +959,10 @@ private fun ReviewDraftEditorSheet(
                 if (isSaving) {
                     CircularProgressIndicator(modifier = Modifier.size(18.dp), color = colorScheme.onPrimary, strokeWidth = 2.dp)
                 } else {
-                    Text("Approve & save expense", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        if (entryType == "income") "Approve & save income" else "Approve & save expense",
+                        style = MaterialTheme.typography.titleSmall
+                    )
                 }
             }
 

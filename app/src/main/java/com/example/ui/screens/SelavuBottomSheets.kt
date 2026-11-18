@@ -131,6 +131,7 @@ fun SelavuModalSheetHost(
     onOpenNewReminder: () -> Unit,
     onUpdateOdometer: (Vehicle, Int) -> Unit,
     onMarkServiceDone: (Vehicle, String) -> Unit,
+    onRecordLastServiceDone: (Vehicle, String, Long, Int) -> Unit = { _, _, _, _ -> },
     onUpdateServiceInterval: (Vehicle, String, Int, Int) -> Unit,
     onDeleteServiceItem: (Vehicle, String) -> Unit,
     onAddServiceItem: (Vehicle, ServiceItem) -> Unit,
@@ -275,9 +276,28 @@ fun SelavuModalSheetHost(
                     val item = vehicle?.items?.firstOrNull { it.id == activeSheet.itemId }
                     if (vehicle != null && item != null) {
                         val state = item.computeState(vehicle.odometer, System.currentTimeMillis())
+                        var lastDoneDateMs by remember(item.id) { mutableStateOf(item.lastDoneEpochMs) }
+                        var lastDoneKmText by remember(item.id) { mutableStateOf(item.lastDoneKm.toString()) }
+                        var showLastDoneDatePicker by remember(item.id) { mutableStateOf(false) }
                         var kmText by remember(item.id) { mutableStateOf(item.intervalKm.toString()) }
                         var moText by remember(item.id) { mutableStateOf(item.intervalMonths.toString()) }
                         var confirmDelete by remember { mutableStateOf(false) }
+
+                        if (showLastDoneDatePicker) {
+                            val pickerState = rememberDatePickerState(initialSelectedDateMillis = lastDoneDateMs)
+                            DatePickerDialog(
+                                onDismissRequest = { showLastDoneDatePicker = false },
+                                confirmButton = {
+                                    TextButton(onClick = {
+                                        pickerState.selectedDateMillis?.let { picked ->
+                                            lastDoneDateMs = picked.coerceAtMost(System.currentTimeMillis())
+                                        }
+                                        showLastDoneDatePicker = false
+                                    }) { Text("OK") }
+                                },
+                                dismissButton = { TextButton(onClick = { showLastDoneDatePicker = false }) { Text("Cancel") } }
+                            ) { DatePicker(state = pickerState) }
+                        }
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -288,6 +308,11 @@ fun SelavuModalSheetHost(
                             StatusPill(state.statusLabel, status = state.status)
                         }
                         Text(state.nextDueLabel, style = MaterialTheme.typography.bodyMedium, color = colorScheme.onSurfaceVariant)
+                        Text(
+                            text = "Last done: ${IndianFormatters.formatDate(item.lastDoneEpochMs)} · ${IndianFormatters.formatIndianInteger(item.lastDoneKm.toLong())} km",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colorScheme.outline
+                        )
 
                         Button(
                             onClick = {
@@ -301,6 +326,51 @@ fun SelavuModalSheetHost(
                             Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Mark done today at ${IndianFormatters.formatIndianInteger(vehicle.odometer.toLong())} km")
+                        }
+
+                        SelavuDivider()
+                        Text("Add / update last service done", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = "Pick an earlier date and odometer reading if this service was done previously.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            SelavuFilterChip(
+                                label = IndianFormatters.formatDate(lastDoneDateMs),
+                                selected = true,
+                                icon = Icons.Filled.CalendarMonth,
+                                onClick = { showLastDoneDatePicker = true },
+                                modifier = Modifier.testTag("last_service_date_chip")
+                            )
+                            SelavuTextField(
+                                value = lastDoneKmText,
+                                onValueChange = { if (it.all(Char::isDigit)) lastDoneKmText = it },
+                                label = "Odometer at service (km)",
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.weight(1f).testTag("last_service_km_input")
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                val km = lastDoneKmText.toIntOrNull()
+                                if (km == null || km < 0) {
+                                    onShowToast("Enter a valid odometer reading (km)")
+                                } else {
+                                    onRecordLastServiceDone(vehicle, item.id, lastDoneDateMs, km)
+                                    onDismiss()
+                                }
+                            },
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("save_last_service_done_btn")
+                        ) {
+                            Icon(Icons.Filled.CalendarMonth, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Save last service done")
                         }
 
                         SelavuDivider()
@@ -330,7 +400,7 @@ fun SelavuModalSheetHost(
                                     onDismiss()
                                 },
                                 shape = MaterialTheme.shapes.small,
-                                modifier = Modifier.weight(1f).height(46.dp)
+                                modifier = Modifier.weight(1f).height(48.dp)
                             ) { Text("Save interval") }
 
                             OutlinedButton(
@@ -344,7 +414,7 @@ fun SelavuModalSheetHost(
                                 },
                                 shape = MaterialTheme.shapes.small,
                                 colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.error),
-                                modifier = Modifier.weight(1f).height(46.dp)
+                                modifier = Modifier.weight(1f).height(48.dp)
                             ) {
                                 Icon(Icons.Filled.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
@@ -363,6 +433,25 @@ fun SelavuModalSheetHost(
                         var name by remember { mutableStateOf("") }
                         var kmText by remember { mutableStateOf("5000") }
                         var moText by remember { mutableStateOf("12") }
+                        var lastDoneDateMs by remember(vehicle.id) { mutableStateOf(System.currentTimeMillis()) }
+                        var lastDoneKmText by remember(vehicle.id) { mutableStateOf(vehicle.odometer.toString()) }
+                        var showAddLastDonePicker by remember { mutableStateOf(false) }
+
+                        if (showAddLastDonePicker) {
+                            val pickerState = rememberDatePickerState(initialSelectedDateMillis = lastDoneDateMs)
+                            DatePickerDialog(
+                                onDismissRequest = { showAddLastDonePicker = false },
+                                confirmButton = {
+                                    TextButton(onClick = {
+                                        pickerState.selectedDateMillis?.let { picked ->
+                                            lastDoneDateMs = picked.coerceAtMost(System.currentTimeMillis())
+                                        }
+                                        showAddLastDonePicker = false
+                                    }) { Text("OK") }
+                                },
+                                dismissButton = { TextButton(onClick = { showAddLastDonePicker = false }) { Text("Cancel") } }
+                            ) { DatePicker(state = pickerState) }
+                        }
 
                         Text("Add service item", style = MaterialTheme.typography.headlineMedium)
                         if (suggestions.isNotEmpty()) {
@@ -403,6 +492,27 @@ fun SelavuModalSheetHost(
                                 modifier = Modifier.weight(1f)
                             )
                         }
+                        Text("Last service done (optional)", style = MaterialTheme.typography.labelLarge)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            SelavuFilterChip(
+                                label = IndianFormatters.formatDate(lastDoneDateMs),
+                                selected = true,
+                                icon = Icons.Filled.CalendarMonth,
+                                onClick = { showAddLastDonePicker = true },
+                                modifier = Modifier.testTag("add_service_last_done_date")
+                            )
+                            SelavuTextField(
+                                value = lastDoneKmText,
+                                onValueChange = { if (it.all(Char::isDigit)) lastDoneKmText = it },
+                                label = "Last done km",
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.weight(1f).testTag("add_service_last_done_km")
+                            )
+                        }
                         Button(
                             onClick = {
                                 if (name.isBlank()) {
@@ -416,7 +526,9 @@ fun SelavuModalSheetHost(
                                             name = name.trim(),
                                             iconKey = "wrench",
                                             intervalKm = kmText.toIntOrNull() ?: 0,
-                                            intervalMonths = (moText.toIntOrNull() ?: 12).coerceAtLeast(1)
+                                            intervalMonths = (moText.toIntOrNull() ?: 12).coerceAtLeast(1),
+                                            lastDoneEpochMs = lastDoneDateMs,
+                                            lastDoneKm = lastDoneKmText.toIntOrNull() ?: vehicle.odometer
                                         )
                                     )
                                     onDismiss()
@@ -1344,6 +1456,7 @@ fun SelavuModalSheetHost(
 
                 is ActiveSheet.ExpenseDetail -> {
                     val exp = activeSheet.expense
+                    val isIncome = exp.entryType == "income"
                     val cat = categories.firstOrNull { it.id == exp.categoryId }
                     val isRetainedLocked = (exp.vehicleId != null && exp.vehicleId in retainedVehicleIds) ||
                         (exp.projectId != null && exp.projectId in retainedProjectIds)
@@ -1351,10 +1464,19 @@ fun SelavuModalSheetHost(
                     var confirmDelete by remember(exp.id) { mutableStateOf(false) }
 
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        CategoryTile(iconKey = cat?.iconKey ?: "tag", colorIndex = cat?.colorIndex ?: 9, size = 46.dp)
+                        CategoryTile(
+                            iconKey = cat?.iconKey ?: if (isIncome) "rupee" else "tag",
+                            colorIndex = cat?.colorIndex ?: if (isIncome) 4 else 9,
+                            size = 46.dp
+                        )
                         Column(modifier = Modifier.weight(1f)) {
                             Text(exp.title, style = MaterialTheme.typography.headlineMedium)
-                            Text("${cat?.name ?: "Other"} · ${exp.subcategory}", style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
+                            val catName = cat?.name ?: if (isIncome) "Income" else "Other"
+                            val subSuffix = exp.subcategory.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
+                            Text("$catName$subSuffix", style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
+                        }
+                        if (isIncome) {
+                            StatusPill(text = "Income", status = ServiceStatus.OK)
                         }
                     }
                     if (isRetainedLocked) {
@@ -1364,12 +1486,12 @@ fun SelavuModalSheetHost(
                         )
                     }
                     Text(
-                        text = IndianFormatters.formatInr(exp.amount),
+                        text = if (isIncome) "+${IndianFormatters.formatInr(exp.amount)}" else IndianFormatters.formatInr(exp.amount),
                         style = MaterialTheme.typography.displayMedium,
-                        color = colorScheme.onSurface
+                        color = if (isIncome) extendedColors.ok else colorScheme.onSurface
                     )
                     Text(
-                        text = "${IndianFormatters.formatDate(exp.dateEpochMs)} · Paid via ${exp.paymentMode}",
+                        text = "${IndianFormatters.formatDate(exp.dateEpochMs)} · ${if (isIncome) "Received via" else "Paid via"} ${exp.paymentMode}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = colorScheme.onSurfaceVariant
                     )
@@ -1482,7 +1604,7 @@ fun SelavuModalSheetHost(
                         ) {
                             Icon(Icons.Filled.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Edit expense")
+                            Text(if (isIncome) "Edit income" else "Edit expense")
                         }
                     }
                     OutlinedButton(
@@ -1503,18 +1625,29 @@ fun SelavuModalSheetHost(
                     ) {
                         Icon(Icons.Filled.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(if (confirmDelete) "Tap again to delete expense" else "Delete expense")
+                        Text(
+                            when {
+                                confirmDelete && isIncome -> "Tap again to delete income"
+                                confirmDelete -> "Tap again to delete expense"
+                                isIncome -> "Delete income"
+                                else -> "Delete expense"
+                            }
+                        )
                     }
                 }
 
                 is ActiveSheet.SharedExpenseDetail -> {
                     val shared = activeSheet.sharedExpense
+                    val isSharedIncome = shared.entryType == "income"
                     var confirmDelete by remember(shared.id) { mutableStateOf(false) }
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         CategoryTile(iconKey = shared.categoryIconKey, colorIndex = shared.categoryColorIndex, size = 46.dp)
                         Column(modifier = Modifier.weight(1f)) {
                             Text(shared.title, style = MaterialTheme.typography.headlineMedium)
                             Text("${shared.categoryName} · ${shared.subcategory}", style = MaterialTheme.typography.bodySmall, color = colorScheme.onSurfaceVariant)
+                        }
+                        if (isSharedIncome) {
+                            StatusPill(text = "Income", status = ServiceStatus.OK)
                         }
                     }
                     if (shared.retainedForDeparture) {
@@ -1524,13 +1657,13 @@ fun SelavuModalSheetHost(
                         )
                     }
                     Text(
-                        text = IndianFormatters.formatInr(shared.amount),
+                        text = if (isSharedIncome) "+${IndianFormatters.formatInr(shared.amount)}" else IndianFormatters.formatInr(shared.amount),
                         style = MaterialTheme.typography.displayMedium,
-                        color = colorScheme.onSurface
+                        color = if (isSharedIncome) extendedColors.ok else colorScheme.onSurface
                     )
                     DetailKv("Shared by", shared.ownerName)
                     DetailKv("Date", IndianFormatters.formatDate(shared.dateEpochMs))
-                    DetailKv("Payment mode", shared.paymentMode)
+                    DetailKv(if (isSharedIncome) "Received via" else "Payment mode", shared.paymentMode)
                     if (shared.odometerReading != null || shared.fuelPricePerLitre != null || shared.fuelLitres != null) {
                         SelavuDivider()
                         Text("Fuel & Odometer Details", style = MaterialTheme.typography.titleMedium)

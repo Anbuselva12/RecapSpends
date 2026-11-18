@@ -89,7 +89,10 @@ data class SelavuStrings(
     val scopeWorkspace: String,
     val filterAllShared: String,
     val filterOthersOnly: String,
-    val filterMineShared: String
+    val filterMineShared: String,
+    val addIncome: String = "Income",
+    val saveIncome: String = "Save income",
+    val exportCsv: String = "Export CSV"
 )
 
 val EnglishStrings = SelavuStrings(
@@ -176,7 +179,10 @@ val EnglishStrings = SelavuStrings(
     scopeWorkspace = "Family Workspace",
     filterAllShared = "All shared",
     filterOthersOnly = "Others only",
-    filterMineShared = "Mine shared"
+    filterMineShared = "Mine shared",
+    addIncome = "Income",
+    saveIncome = "Save income",
+    exportCsv = "Export CSV"
 )
 
 val TamilStrings = SelavuStrings(
@@ -263,7 +269,10 @@ val TamilStrings = SelavuStrings(
     scopeWorkspace = "குடும்பம்",
     filterAllShared = "அனைத்தும்",
     filterOthersOnly = "மற்றவர்கள் மட்டும்",
-    filterMineShared = "என் பகிர்வு"
+    filterMineShared = "என் பகிர்வு",
+    addIncome = "வருமானம்",
+    saveIncome = "வருமானத்தை சேமி",
+    exportCsv = "CSV ஏற்றுமதி"
 )
 
 val LocalSelavuStrings = staticCompositionLocalOf { EnglishStrings }

@@ -10,7 +10,8 @@ data class ParsedExpenseAlert(
     val suggestedCategoryId: String,
     val suggestedSubcategory: String,
     val fingerprint: String,
-    val snippet: String
+    val snippet: String,
+    val entryType: String = "expense"
 )
 
 object MessageExpenseParser {
@@ -43,9 +44,9 @@ object MessageExpenseParser {
         RegexOption.IGNORE_CASE
     )
 
-    // Always reject regardless of whether "debited" appears anywhere in the text
-    private val hardNonSpendRegex = Regex(
-        """\b(declined|failed|unsuccessful|rejected|bounced|dishonoured|dishonored|blocked|insufficient\s+(?:bal|balance|fund|funds)|cancelled|canceled|timed\s*out|reversed|reversal|refund(?:ed)?|cashback|""" +
+    // Always reject regardless of whether "debited" or "credited" appears anywhere in the text
+    private val hardNonTransactionRegex = Regex(
+        """\b(declined|failed|unsuccessful|rejected|bounced|dishonoured|dishonored|blocked|insufficient\s+(?:bal|balance|fund|funds)|cancelled|canceled|timed\s*out|reversed|reversal|""" +
             """requesting|has\s+requested|requested\s+(?:rs\.?|inr|₹)|collect\s+request|approve\s+to\s+pay|wants\s+to\s+collect|""" +
             """mandate\s+(?:created|registered|approved|modified|paused|revoked|cancelled|canceled|declined|failed|expired)|""" +
             """autopay\s+(?:created|registered|set\s*up|modified|paused|revoked|cancelled|canceled|declined|failed)|""" +
@@ -53,18 +54,19 @@ object MessageExpenseParser {
             """statement\s+generated|e-?statement|total\s+amount\s+due|total\s+due|minimum\s+amount\s+due|min\.?\s*due|payment\s+due|bill\s+is\s+due|due\s+on|due\s+date|payable\s+by|pay\s+before|""" +
             """available\s+balance\s+is|avl\.?\s*bal\.?\s*is|your\s+(?:a/c|account)\s+balance|mini\s+statement|""" +
             """pre-?approved|convert\s+to\s+emi|emi\s+offer|credit\s+limit\s+increased|limit\s+enhancement|apply\s+now|""" +
-            """payment\s+(?:.{0,45}?\s+)?received|payment\s+received\s+towards|thank(?:s|\s+you)\s+for\s+(?:your\s+)?payment\b|""" +
-            """salary|dividend|interest\s+credited|neft\s+cr\b|imps\s+cr\b|rtgs\s+cr\b|upi\s+cr\b)\b""",
+            """payment\s+(?:.{0,45}?\s+)?received|payment\s+received\s+towards|thank(?:s|\s+you)\s+for\s+(?:your\s+)?payment)\b""",
         RegexOption.IGNORE_CASE
     )
 
-    // Credits/deposits (allow outgoing bank debits that mention "debited from A/c ... credited to <recipient>")
+    // Credits/deposits (income) vs outgoing bank debits mentioning recipient credit
     private val creditWordRegex = Regex(
-        """\b(credited|deposited|cr\.?\s+to\s+(?:your|ur|a/c|acct|account))\b""",
+        """\b(credited|deposited|refund(?:ed)?|cashback|salary\s+credited|dividend|interest\s+credited|neft\s+cr|imps\s+cr|rtgs\s+cr|upi\s+cr|cr\.?\s+to\s+(?:your|ur|a/c|acct|account))\b""",
         RegexOption.IGNORE_CASE
     )
     private val creditToOwnAccountRegex = Regex(
-        """\b(?:is|has\s+been)?\s*credited\s+(?:to|in|into)\s+(?:your|ur|a/c|acct|account|card|wallet)\b|\b(?:a/c|acct|account|card)[^.]{0,25}\b(?:is|has\s+been)?\s*credited\b""",
+        """\b(?:is|has\s+been)?\s*(?:credited|deposited|refunded)\s+(?:to|in|into)\s+(?:your|ur|a/c|acct|account|card|wallet)\b|""" +
+            """\b(?:a/c|acct|account|card)[^.]{0,30}\b(?:is|has\s+been)?\s*(?:credited|deposited)\b|""" +
+            """\b(cashback|salary\s+credited|dividend|interest\s+credited|neft\s+cr|imps\s+cr|rtgs\s+cr|upi\s+cr)\b""",
         RegexOption.IGNORE_CASE
     )
 
@@ -85,7 +87,7 @@ object MessageExpenseParser {
 
     // Fallback when Indian bank SMS omits "Rs"/"INR" (e.g. SBI UPI: "A/C X9267 debited by 5680.0 on date...")
     private val verbAmountRegex = Regex(
-        """\b(?:debited\s+(?:by|for|with|of)|debit\s+(?:of|by)|spent|withdrawn|deducted|paid|charged|purchase\s+of|txn\s+of|transaction\s+of)\s+(?:by|for|of)?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)(?!-\d{2})\b""",
+        """\b(?:debited\s+(?:by|for|with|of)|credited\s+(?:by|with|for|of)|debit\s+(?:of|by)|credit\s+(?:of|by)|spent|withdrawn|deducted|paid|charged|deposited|refunded|purchase\s+of|txn\s+of|transaction\s+of)\s+(?:by|for|of|with)?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)(?!-\d{2})\b""",
         RegexOption.IGNORE_CASE
     )
 
@@ -95,26 +97,36 @@ object MessageExpenseParser {
     )
 
     // Specific Indian bank merchant extraction patterns (ordered from most specific to general)
-    private val merchantPatterns = listOf(
+    private val commonMerchantPatterns = listOf(
         // SBI UPI: "trf to AMAZON SELLER Refno ..." or "transfer to Rahul"
-        Regex("""\b(?:trf|transfer|transferred)\s+to\s+([A-Za-z0-9@_.][A-Za-z0-9@_. &'\-/]{1,50})""", RegexOption.IGNORE_CASE),
-        // ICICI / HDFC / Axis / PNB info formats: "Info- UPI/P2M/631909616383/ZOMATO", "by UPI-SWIGGY-swiggy@icici"
-        Regex("""\bby\s+UPI[-/]([A-Za-z0-9 &'.]{2,45})(?:[-/]|$)""", RegexOption.IGNORE_CASE),
-        Regex("""\bInfo\s*[:\-]\s*(?:UPI|IMPS|NEFT)[/-](?:(?:P2[AM]|DR|CR)[/-])?(?:[0-9A-Za-z]{4,}[/-])+([A-Za-z][A-Za-z0-9@_. &'\-]{1,45})""", RegexOption.IGNORE_CASE),
-        Regex("""\bUPI/(?:(?:P2[AM]|DR|CR)/)?(?:[0-9]{4,}/)?([A-Za-z][A-Za-z0-9_. &'\-]{1,40})(?:/|$)""", RegexOption.IGNORE_CASE),
-        Regex("""\bIMPS/[A-Z0-9]+/[0-9]+/([A-Za-z][A-Za-z0-9_. &'\-]{1,40})(?:/|$)""", RegexOption.IGNORE_CASE),
+        Regex("""\b(?:trf|transfer|transferred)\s+to\s+([A-Za-z0-9@_.+][A-Za-z0-9@_.+ &'\-/]{1,80})""", RegexOption.IGNORE_CASE),
+        // Credit/deposit sender: "by UPI-SENDER-vpa"
+        Regex("""\bby\s+UPI[-/]([A-Za-z0-9 &'.]{2,60})(?:[-/]|$)""", RegexOption.IGNORE_CASE),
+        Regex("""\bInfo\s*[:\-]\s*(?:UPI|IMPS|NEFT|RTGS)[/-](?:(?:P2[AM]|DR|CR)[/-])?(?:[0-9A-Za-z]{4,}[/-])+([A-Za-z][A-Za-z0-9@_.+ &'\-]{1,60})""", RegexOption.IGNORE_CASE),
+        Regex("""\bUPI/(?:(?:P2[AM]|DR|CR)/)?(?:[0-9]{4,}/)?([A-Za-z][A-Za-z0-9_.+ &'\-]{1,55})(?:/|$)""", RegexOption.IGNORE_CASE),
+        Regex("""\b(?:IMPS|NEFT|RTGS)/[A-Z0-9]+/(?:[0-9]+/)?([A-Za-z][A-Za-z0-9_.+ &'\-]{1,55})(?:/|$)""", RegexOption.IGNORE_CASE)
+    )
+
+    private val expenseMerchantPatterns = commonMerchantPatterns + listOf(
         // Paid/sent to VPA or merchant
-        Regex("""\b(?:paid\s+to|sent\s+to|to\s+vpa|vpa|merchant)\s+([A-Za-z0-9@_.][A-Za-z0-9@_. &'\-/]{1,50})""", RegexOption.IGNORE_CASE),
+        Regex("""\b(?:paid\s+to|sent\s+to|to\s+vpa|vpa|merchant)\s+([A-Za-z0-9@_.+][A-Za-z0-9@_.+ &'\-/]{1,80})""", RegexOption.IGNORE_CASE),
         // Card / POS / UPI spend: "at sbipmopad0222119002854 on 15-11-26 via UPI" or "at AMAZON PAY*..."
-        Regex("""\bat\s+([A-Za-z0-9@_.][A-Za-z0-9@_. &'\-*/]{1,50})""", RegexOption.IGNORE_CASE),
+        Regex("""\bat\s+([A-Za-z0-9@_.+][A-Za-z0-9@_.+ &'\-*/]{1,80})""", RegexOption.IGNORE_CASE),
         // "towards Netflix India" / "to SWIGGY"
-        Regex("""\b(?:towards|to)\s+([A-Za-z0-9@_.][A-Za-z0-9@_. &'\-/]{1,50})""", RegexOption.IGNORE_CASE),
+        Regex("""\b(?:towards|to)\s+([A-Za-z0-9@_.+][A-Za-z0-9@_.+ &'\-/]{1,80})""", RegexOption.IGNORE_CASE),
         // ICICI Card fallback: "on 15-Nov-26 on SWIGGY." (not a date or bank/card phrase)
-        Regex("""\bon\s+(?!\d{1,2}[-/\s](?:\d{1,2}|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))([A-Za-z][A-Za-z0-9@_. &'\-*/]{1,45})""", RegexOption.IGNORE_CASE)
+        Regex("""\bon\s+(?!\d{1,2}[-/\s](?:\d{1,2}|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec))([A-Za-z][A-Za-z0-9@_.+ &'\-*/]{1,60})""", RegexOption.IGNORE_CASE)
+    )
+
+    private val incomeMerchantPatterns = commonMerchantPatterns + listOf(
+        // "from ACME CORP" / "received from ..." / "from Rahul"
+        Regex("""\b(?:received\s+from|credited\s+from|from)\s+([A-Za-z0-9@_.+][A-Za-z0-9@_.+ &'\-/]{1,80})""", RegexOption.IGNORE_CASE),
+        // "towards salary"
+        Regex("""\btowards\s+([A-Za-z0-9@_.+][A-Za-z0-9@_.+ &'\-/]{1,80})""", RegexOption.IGNORE_CASE)
     )
 
     private val merchantTrailStopRegex = Regex(
-        """\s+(?:\b(?:on|dt|date|via|using|from|for|ref(?:\s*no)?|refno|utr|rrn|upi|info|avl|avail|bal|lmt|limit|if|not|trxn|txn|call|block)\b|\(|\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b).*$""",
+        """\s+(?:\b(?:on|dt|date|via|using|from|for|ref(?:\s*no)?|refno|utr|rrn|upi|info|avl|avail|bal|lmt|limit|if|not|trxn|txn|call|block|your|ur)\b|\(|\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b).*$""",
         RegexOption.IGNORE_CASE
     )
 
@@ -123,7 +135,9 @@ object MessageExpenseParser {
         body: String,
         timestampMs: Long = System.currentTimeMillis()
     ): ParsedExpenseAlert? {
-        val combinedRaw = listOf(senderTitle.trim(), body.trim())
+        val cleanSenderInput = normalizeText(senderTitle)
+        val cleanBodyInput = normalizeText(body)
+        val combinedRaw = listOf(cleanSenderInput, cleanBodyInput)
             .filter { it.isNotBlank() }
             .joinToString(" · ")
         if (combinedRaw.isBlank()) return null
@@ -134,39 +148,38 @@ object MessageExpenseParser {
         }
 
         // Strip trailing fraud disclaimers and balance/limit tails before spend checks and extraction
-        val bodyWithoutFooter = fraudFooterRegex.replace(body, " ").trim()
+        val bodyWithoutFooter = fraudFooterRegex.replace(cleanBodyInput, " ").trim()
         val sanitizedForAmount = balanceClauseRegex.replace(bodyWithoutFooter, " ").trim()
-        val fullSanitized = "$senderTitle $sanitizedForAmount".trim()
+        val fullSanitized = "$cleanSenderInput $sanitizedForAmount".trim()
 
-        // Hard reject refunds, failures, collect requests, mandate setups, bill due reminders, balance enquiries, promos
-        if (hardNonSpendRegex.containsMatchIn(fullSanitized)) {
+        // Hard reject failures, collect requests, mandate setups, bill due reminders, balance enquiries, promos, card payment acks
+        if (hardNonTransactionRegex.containsMatchIn(fullSanitized)) {
             return null
         }
 
-        // Reject incoming credits/deposits while still allowing outgoing debit alerts that mention recipient credit
         val hasDebit = sanitizedForAmount.contains("debited", ignoreCase = true) ||
             sanitizedForAmount.contains("deducted", ignoreCase = true) ||
-            Regex("""\bdr\.?\b""", RegexOption.IGNORE_CASE).containsMatchIn(sanitizedForAmount)
-        if (creditWordRegex.containsMatchIn(fullSanitized)) {
-            if (!hasDebit || creditToOwnAccountRegex.containsMatchIn(sanitizedForAmount)) {
-                return null
-            }
+            debitTriggerRegex.containsMatchIn(sanitizedForAmount)
+        val hasCreditWord = creditWordRegex.containsMatchIn(fullSanitized)
+        val isCreditToOwnAccount = creditToOwnAccountRegex.containsMatchIn(sanitizedForAmount)
+
+        val isIncome: Boolean = when {
+            isCreditToOwnAccount -> true
+            hasCreditWord && !hasDebit -> true
+            hasDebit -> false
+            else -> return null
         }
 
-        // Must look like a spend/debit alert
-        if (!debitTriggerRegex.containsMatchIn(fullSanitized)) {
-            return null
-        }
-
-        val amount = extractAmount(sanitizedForAmount) ?: extractAmount(senderTitle) ?: return null
+        val amount = extractAmount(sanitizedForAmount) ?: extractAmount(cleanSenderInput) ?: return null
         if (amount <= 0.0 || amount > 10_000_000.0) return null
 
+        val entryType = if (isIncome) "income" else "expense"
         val paymentMode = detectPaymentMode(fullSanitized)
-        val merchant = extractMerchant(senderTitle, sanitizedForAmount)
-        val (categoryId, subcategory) = suggestCategory(fullSanitized, merchant)
+        val merchant = extractMerchant(cleanSenderInput, sanitizedForAmount, isIncome)
+        val (categoryId, subcategory) = suggestCategory(fullSanitized, merchant, isIncome)
 
         val bucket = (timestampMs / 120_000L)
-        val fingerprint = "${(amount * 100.0).roundToLong()}|${merchant.lowercase()}|$bucket"
+        val fingerprint = "$entryType|${(amount * 100.0).roundToLong()}|${merchant.lowercase()}|$bucket"
         val cleanSnippet = combinedRaw.replace(Regex("\\s+"), " ").trim().take(220)
 
         return ParsedExpenseAlert(
@@ -177,9 +190,23 @@ object MessageExpenseParser {
             suggestedCategoryId = categoryId,
             suggestedSubcategory = subcategory,
             fingerprint = fingerprint,
-            snippet = cleanSnippet
+            snippet = cleanSnippet,
+            entryType = entryType
         )
     }
+
+    private fun normalizeText(input: String): String =
+        input
+            .replace("\u200B", "")
+            .replace("\u200C", "")
+            .replace("\u200D", "")
+            .replace("\uFEFF", "")
+            .replace('\u00A0', ' ')
+            .replace('\u2007', ' ')
+            .replace('\u202F', ' ')
+            .replace(Regex("[\\r\\n\\t]+"), " ")
+            .replace(Regex(" {2,}"), " ")
+            .trim()
 
     private fun extractAmount(text: String): Double? {
         val match = currencyPrefixRegex.find(text)
@@ -210,20 +237,21 @@ object MessageExpenseParser {
         }
     }
 
-    private fun extractMerchant(senderTitle: String, body: String): String {
+    private fun extractMerchant(senderTitle: String, body: String, isIncome: Boolean): String {
         val lowerBody = body.lowercase()
-        if (("atm" in lowerBody || "cash withdrawal" in lowerBody) &&
+        if (!isIncome && ("atm" in lowerBody || "cash withdrawal" in lowerBody) &&
             ("withdrawn" in lowerBody || "withdrawal" in lowerBody || "debited" in lowerBody)
         ) {
             return "ATM Cash Withdrawal"
         }
 
-        for (pattern in merchantPatterns) {
+        val patterns = if (isIncome) incomeMerchantPatterns else expenseMerchantPatterns
+        for (pattern in patterns) {
             val match = pattern.find(body) ?: continue
             val raw = match.groupValues.getOrNull(1).orEmpty()
             val cleaned = merchantTrailStopRegex.replace(raw, "")
                 .replace(Regex("[*]+"), " ")
-                .replace(Regex("[^A-Za-z0-9@_. &'.\\-]"), " ")
+                .replace(Regex("[^A-Za-z0-9@_.+ &'.\\-]"), " ")
                 .replace(Regex("\\s+"), " ")
                 .trim()
                 .trimEnd('.', '-', '/', ',')
@@ -239,8 +267,20 @@ object MessageExpenseParser {
             }
         }
 
+        if (isIncome) {
+            return when {
+                "salary" in lowerBody -> "Salary credit"
+                "cashback" in lowerBody -> "Cashback credit"
+                "refund" in lowerBody -> "Refund credit"
+                "dividend" in lowerBody -> "Dividend credit"
+                "interest" in lowerBody -> "Interest credit"
+                else -> "Bank credit"
+            }
+        }
+
         val cleanSender = senderTitle
-            .replace(Regex("^(?:AD|AX|JD|VM|VK|VM|BZ|BP|JK|QP|CP|TM|TX|MD|IM|DM|RM|VA|BW)-", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("^(?:AD|AX|JD|VM|VK|BZ|BP|JK|QP|CP|TM|TX|MD|IM|DM|RM|VA|BW)-", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("-(?:S|T|P|G)$", RegexOption.IGNORE_CASE), "")
             .replace(Regex("(?:alert|transaction|notification|debit|spent|paid)", RegexOption.IGNORE_CASE), "")
             .replace(Regex("\\s+"), " ")
             .trim()
@@ -248,8 +288,17 @@ object MessageExpenseParser {
         return cleanSender.ifBlank { "Transaction alert" }
     }
 
-    private fun suggestCategory(text: String, merchant: String): Pair<String, String> {
+    private fun suggestCategory(text: String, merchant: String, isIncome: Boolean): Pair<String, String> {
         val lower = "$text $merchant".lowercase()
+        if (isIncome) {
+            return when {
+                "salary" in lower -> "inc" to "Salary"
+                "refund" in lower || "cashback" in lower -> "inc" to "Refund & cashback"
+                "dividend" in lower || "interest" in lower -> "inc" to "Interest & dividend"
+                "rent" in lower -> "inc" to "Rental & other"
+                else -> "inc" to "Business / Freelance"
+            }
+        }
         return when {
             listOf(
                 "swiggy", "zomato", "restaurant", "cafe", "coffee", "starbucks",

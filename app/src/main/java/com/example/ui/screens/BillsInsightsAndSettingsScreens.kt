@@ -1,6 +1,8 @@
 package com.example.ui.screens
 
 import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -30,6 +32,7 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteForever
@@ -45,17 +48,22 @@ import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -107,8 +115,8 @@ import com.example.ui.components.SelavuSegmentedControl
 import com.example.ui.components.SelavuTextField
 import com.example.ui.components.SelavuTopNavBar
 import com.example.ui.components.StatusPill
-import com.example.ui.theme.MonoCodeStyle
 import com.example.ui.theme.SelavuTheme
+import com.example.util.CsvExporter
 import com.example.util.IndianFormatters
 import com.example.util.selavuStrings
 import com.google.firebase.auth.FirebaseUser
@@ -563,14 +571,24 @@ fun InsightsScreen(
     val nowMs = remember { System.currentTimeMillis() }
     var range by rememberSaveable { mutableStateOf("month") }
 
-    val monthExpenses = remember(expenses, nowMs) {
-        expenses.filter { IndianFormatters.isSameMonth(it.dateEpochMs, nowMs) }
+    val spendExpenses = remember(expenses) {
+        expenses.filter { it.entryType != "income" }
     }
+    val incomeExpenses = remember(expenses) {
+        expenses.filter { it.entryType == "income" }
+    }
+    val monthExpenses = remember(spendExpenses, nowMs) {
+        spendExpenses.filter { IndianFormatters.isSameMonth(it.dateEpochMs, nowMs) }
+    }
+    val monthIncomeTotal = remember(incomeExpenses, nowMs) {
+        incomeExpenses.filter { IndianFormatters.isSameMonth(it.dateEpochMs, nowMs) }.sumOf { it.amount }
+    }
+    val monthSpendTotal = remember(monthExpenses) { monthExpenses.sumOf { it.amount } }
     val sixMonthMonths = remember(nowMs) {
         (5 downTo 0).map { offset -> IndianFormatters.addMonths(nowMs, -offset) }
     }
-    val sixMonthExpenses = remember(expenses, sixMonthMonths) {
-        expenses.filter { exp -> sixMonthMonths.any { m -> IndianFormatters.isSameMonth(exp.dateEpochMs, m) } }
+    val sixMonthExpenses = remember(spendExpenses, sixMonthMonths) {
+        spendExpenses.filter { exp -> sixMonthMonths.any { m -> IndianFormatters.isSameMonth(exp.dateEpochMs, m) } }
     }
 
     val slices = remember(range, monthExpenses, sixMonthExpenses, categories) {
@@ -593,9 +611,9 @@ fun InsightsScreen(
 
     val totalShown = remember(slices) { slices.sumOf { it.amount } }
 
-    val sixMonthSeries = remember(expenses, sixMonthMonths) {
+    val sixMonthSeries = remember(spendExpenses, sixMonthMonths) {
         sixMonthMonths.map { m ->
-            val sum = expenses.filter { IndianFormatters.isSameMonth(it.dateEpochMs, m) }.sumOf { it.amount }
+            val sum = spendExpenses.filter { IndianFormatters.isSameMonth(it.dateEpochMs, m) }.sumOf { it.amount }
             IndianFormatters.monthLabel(m) to sum
         }
     }
@@ -727,6 +745,16 @@ fun InsightsScreen(
             item {
                 SectionHeader(title = strings.worthALook)
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (monthIncomeTotal > 0.0) {
+                        val net = monthIncomeTotal - monthSpendTotal
+                        val netPrefix = if (net >= 0.0) "+" else "-"
+                        InsightCalloutCard(
+                            iconKey = "rupee",
+                            colorIndex = 4,
+                            title = "Income vs spending this month",
+                            body = "Income +${IndianFormatters.formatInr(monthIncomeTotal)} · Spent ${IndianFormatters.formatInr(monthSpendTotal)} · Net $netPrefix${IndianFormatters.formatInr(kotlin.math.abs(net))}."
+                        )
+                    }
                     val primaryBike = vehicles.firstOrNull()
                     InsightCalloutCard(
                         iconKey = "fuel",
@@ -801,6 +829,7 @@ private fun InsightCalloutCard(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ActivityScreen(
     categories: List<Category>,
@@ -810,14 +839,25 @@ fun ActivityScreen(
     sharedExpenses: List<SharedExpense> = emptyList(),
     onBack: () -> Unit,
     onOpenExpenseDetail: (Expense) -> Unit,
-    onOpenSharedExpenseDetail: (SharedExpense) -> Unit = {}
+    onOpenSharedExpenseDetail: (SharedExpense) -> Unit = {},
+    onShowToast: (String) -> Unit = {}
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val extendedColors = SelavuTheme.extendedColors
     val strings = selavuStrings()
+    val context = LocalContext.current
+    val nowMs = remember { System.currentTimeMillis() }
+
     var query by rememberSaveable { mutableStateOf("") }
     var filterKey by rememberSaveable { mutableStateOf("all") }
+    var entryTypeFilter by rememberSaveable { mutableStateOf("all") } // all | expense | income
+    var dateRangeFilter by rememberSaveable { mutableStateOf("all") } // all | month | 30d | 90d | custom
+    var customStartMs by rememberSaveable { mutableStateOf(IndianFormatters.startOfDay(IndianFormatters.addDays(nowMs, -30))) }
+    var customEndMs by rememberSaveable { mutableStateOf(IndianFormatters.startOfDay(nowMs)) }
+    var pickingCustomField by remember { mutableStateOf<String?>(null) } // "start" or "end"
     var scopeName by rememberSaveable { mutableStateOf(ExpenseScope.INDIVIDUAL.name) }
     var wsFilterName by rememberSaveable { mutableStateOf(WorkspaceExpenseFilter.ALL.name) }
+    var showExportDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(workspace) {
         if (workspace == null) scopeName = ExpenseScope.INDIVIDUAL.name
@@ -830,9 +870,26 @@ fun ActivityScreen(
     val wsFilter = WorkspaceExpenseFilter.entries.firstOrNull { it.name == wsFilterName }
         ?: WorkspaceExpenseFilter.ALL
 
-    val filtered = remember(expenses, query, filterKey) {
+    fun matchesDateRange(epochMs: Long): Boolean = when (dateRangeFilter) {
+        "month" -> IndianFormatters.isSameMonth(epochMs, nowMs)
+        "30d" -> epochMs >= IndianFormatters.startOfDay(IndianFormatters.addDays(nowMs, -29))
+        "90d" -> epochMs >= IndianFormatters.startOfDay(IndianFormatters.addDays(nowMs, -89))
+        "custom" -> {
+            val start = IndianFormatters.startOfDay(minOf(customStartMs, customEndMs))
+            val end = IndianFormatters.startOfDay(maxOf(customStartMs, customEndMs)) + 86_399_999L
+            epochMs in start..end
+        }
+        else -> true
+    }
+
+    val filtered = remember(expenses, query, filterKey, entryTypeFilter, dateRangeFilter, customStartMs, customEndMs) {
         val q = query.trim().lowercase()
         expenses.filter { exp ->
+            val matchesType = when (entryTypeFilter) {
+                "expense" -> exp.entryType != "income"
+                "income" -> exp.entryType == "income"
+                else -> true
+            }
             val matchesFilter = when (filterKey) {
                 "all" -> true
                 "gst" -> !exp.gstin.isNullOrBlank() || (exp.cgst ?: 0.0) > 0.0 || (exp.igst ?: 0.0) > 0.0
@@ -847,11 +904,11 @@ fun ActivityScreen(
                 (exp.items?.any {
                     it.name.lowercase().contains(q) || it.hsn.lowercase().contains(q)
                 } == true)
-            matchesFilter && matchesQuery
+            matchesType && matchesFilter && matchesDateRange(exp.dateEpochMs) && matchesQuery
         }.sortedByDescending { it.dateEpochMs }
     }
 
-    val filteredShared = remember(sharedExpenses, wsFilter, currentUid, query) {
+    val filteredShared = remember(sharedExpenses, wsFilter, currentUid, query, entryTypeFilter, dateRangeFilter, customStartMs, customEndMs) {
         val q = query.trim().lowercase()
         sharedExpenses.filter { shared ->
             val matchesMember = when (wsFilter) {
@@ -859,19 +916,143 @@ fun ActivityScreen(
                 WorkspaceExpenseFilter.OTHERS_ONLY -> shared.ownerUid != currentUid
                 WorkspaceExpenseFilter.MINE_ONLY -> shared.ownerUid == currentUid
             }
+            val matchesType = when (entryTypeFilter) {
+                "expense" -> shared.entryType != "income"
+                "income" -> shared.entryType == "income"
+                else -> true
+            }
             val matchesQuery = q.isEmpty() ||
                 shared.title.lowercase().contains(q) ||
                 shared.ownerName.lowercase().contains(q) ||
                 shared.categoryName.lowercase().contains(q) ||
                 shared.subcategory.lowercase().contains(q)
-            matchesMember && matchesQuery
+            matchesMember && matchesType && matchesDateRange(shared.dateEpochMs) && matchesQuery
         }.sortedByDescending { it.dateEpochMs }
     }
 
-    val totalFiltered = remember(scope, filtered, filteredShared) {
-        if (scope == ExpenseScope.WORKSPACE) filteredShared.sumOf { it.amount } else filtered.sumOf { it.amount }
-    }
     val countFiltered = if (scope == ExpenseScope.WORKSPACE) filteredShared.size else filtered.size
+    val filteredSpendTotal = remember(scope, filtered, filteredShared) {
+        if (scope == ExpenseScope.WORKSPACE) {
+            filteredShared.filter { it.entryType != "income" }.sumOf { it.amount }
+        } else {
+            filtered.filter { it.entryType != "income" }.sumOf { it.amount }
+        }
+    }
+    val filteredIncomeTotal = remember(scope, filtered, filteredShared) {
+        if (scope == ExpenseScope.WORKSPACE) {
+            filteredShared.filter { it.entryType == "income" }.sumOf { it.amount }
+        } else {
+            filtered.filter { it.entryType == "income" }.sumOf { it.amount }
+        }
+    }
+
+    val createCsvLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        if (uri != null) {
+            try {
+                val csvText = if (scope == ExpenseScope.WORKSPACE) {
+                    CsvExporter.exportSharedExpensesCsv(filteredShared)
+                } else {
+                    CsvExporter.exportExpensesCsv(filtered, categories)
+                }
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(csvText.toByteArray(Charsets.UTF_8))
+                }
+                onShowToast("Exported $countFiltered entries to CSV")
+            } catch (e: Exception) {
+                onShowToast(e.localizedMessage ?: "Failed to save CSV")
+            }
+        }
+    }
+
+    pickingCustomField?.let { field ->
+        val initialMs = if (field == "start") customStartMs else customEndMs
+        val pickerState = rememberDatePickerState(initialSelectedDateMillis = initialMs)
+        DatePickerDialog(
+            onDismissRequest = { pickingCustomField = null },
+            confirmButton = {
+                TextButton(onClick = {
+                    pickerState.selectedDateMillis?.let { picked ->
+                        if (field == "start") customStartMs = IndianFormatters.startOfDay(picked)
+                        else customEndMs = IndianFormatters.startOfDay(picked)
+                        dateRangeFilter = "custom"
+                    }
+                    pickingCustomField = null
+                }) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pickingCustomField = null }) { Text("Cancel") }
+            }
+        ) {
+            DatePicker(state = pickerState)
+        }
+    }
+
+    if (showExportDialog) {
+        val suggestedName = if (scope == ExpenseScope.WORKSPACE) {
+            "recapspends_workspace_filtered.csv"
+        } else {
+            "recapspends_filtered.csv"
+        }
+        AlertDialog(
+            onDismissRequest = { showExportDialog = false },
+            containerColor = colorScheme.surface,
+            titleContentColor = colorScheme.onSurface,
+            textContentColor = colorScheme.onSurfaceVariant,
+            shape = MaterialTheme.shapes.extraLarge,
+            title = {
+                Text("Export filtered CSV", style = MaterialTheme.typography.headlineMedium)
+            },
+            text = {
+                Text(
+                    "Export the currently filtered $countFiltered entry row${if (countFiltered == 1) "" else "s"} as a .csv file or share directly.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showExportDialog = false
+                        createCsvLauncher.launch(suggestedName)
+                    },
+                    shape = MaterialTheme.shapes.small,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colorScheme.primary,
+                        contentColor = colorScheme.onPrimary
+                    ),
+                    modifier = Modifier.testTag("export_csv_save_file_btn")
+                ) {
+                    Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Save .csv file")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showExportDialog = false
+                        val csvText = if (scope == ExpenseScope.WORKSPACE) {
+                            CsvExporter.exportSharedExpensesCsv(filteredShared)
+                        } else {
+                            CsvExporter.exportExpensesCsv(filtered, categories)
+                        }
+                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/csv"
+                            putExtra(Intent.EXTRA_SUBJECT, "RecapSpends Filtered CSV ($countFiltered entries)")
+                            putExtra(Intent.EXTRA_TEXT, csvText)
+                        }
+                        context.startActivity(Intent.createChooser(shareIntent, "Share filtered CSV"))
+                    },
+                    modifier = Modifier.testTag("export_csv_share_btn")
+                ) {
+                    Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Share CSV")
+                }
+            }
+        )
+    }
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -885,7 +1066,28 @@ fun ActivityScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             item {
-                SelavuTopNavBar(title = strings.allActivity, onBack = onBack)
+                SelavuTopNavBar(
+                    title = strings.allActivity,
+                    onBack = onBack,
+                    trailing = {
+                        OutlinedButton(
+                            onClick = {
+                                if (countFiltered == 0) {
+                                    onShowToast("No matching entries to export")
+                                } else {
+                                    showExportDialog = true
+                                }
+                            },
+                            shape = MaterialTheme.shapes.small,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.height(48.dp).testTag("activity_export_csv_button")
+                        ) {
+                            Icon(Icons.Filled.Download, contentDescription = "Export CSV", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(strings.exportCsv, style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+                )
                 if (workspace != null) {
                     SelavuSegmentedControl(
                         options = listOf(
@@ -908,6 +1110,103 @@ fun ActivityScreen(
                         .fillMaxWidth()
                         .testTag("activity_search_input")
                 )
+            }
+
+            // Entry type & date range filters
+            item {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item {
+                        SelavuFilterChip(
+                            label = "All types",
+                            selected = entryTypeFilter == "all",
+                            onClick = { entryTypeFilter = "all" },
+                            modifier = Modifier.testTag("activity_type_all")
+                        )
+                    }
+                    item {
+                        SelavuFilterChip(
+                            label = "Expenses",
+                            selected = entryTypeFilter == "expense",
+                            onClick = { entryTypeFilter = "expense" },
+                            modifier = Modifier.testTag("activity_type_expense")
+                        )
+                    }
+                    item {
+                        SelavuFilterChip(
+                            label = "Income",
+                            selected = entryTypeFilter == "income",
+                            onClick = { entryTypeFilter = "income" },
+                            modifier = Modifier.testTag("activity_type_income")
+                        )
+                    }
+                    item {
+                        SelavuFilterChip(
+                            label = "All dates",
+                            selected = dateRangeFilter == "all",
+                            onClick = { dateRangeFilter = "all" },
+                            modifier = Modifier.testTag("activity_date_all")
+                        )
+                    }
+                    item {
+                        SelavuFilterChip(
+                            label = "This month",
+                            selected = dateRangeFilter == "month",
+                            onClick = { dateRangeFilter = "month" },
+                            modifier = Modifier.testTag("activity_date_month")
+                        )
+                    }
+                    item {
+                        SelavuFilterChip(
+                            label = "Last 30d",
+                            selected = dateRangeFilter == "30d",
+                            onClick = { dateRangeFilter = "30d" },
+                            modifier = Modifier.testTag("activity_date_30d")
+                        )
+                    }
+                    item {
+                        SelavuFilterChip(
+                            label = "Last 90d",
+                            selected = dateRangeFilter == "90d",
+                            onClick = { dateRangeFilter = "90d" },
+                            modifier = Modifier.testTag("activity_date_90d")
+                        )
+                    }
+                    item {
+                        SelavuFilterChip(
+                            label = if (dateRangeFilter == "custom") {
+                                "${IndianFormatters.formatShortDate(customStartMs)} - ${IndianFormatters.formatShortDate(customEndMs)}"
+                            } else {
+                                "Custom dates"
+                            },
+                            selected = dateRangeFilter == "custom",
+                            icon = Icons.Filled.CalendarMonth,
+                            onClick = {
+                                if (dateRangeFilter != "custom") dateRangeFilter = "custom"
+                                pickingCustomField = "start"
+                            },
+                            modifier = Modifier.testTag("activity_date_custom")
+                        )
+                    }
+                }
+                if (dateRangeFilter == "custom") {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SelavuFilterChip(
+                            label = "From: ${IndianFormatters.formatDate(customStartMs)}",
+                            selected = true,
+                            icon = Icons.Filled.CalendarMonth,
+                            onClick = { pickingCustomField = "start" },
+                            modifier = Modifier.testTag("activity_custom_start")
+                        )
+                        SelavuFilterChip(
+                            label = "To: ${IndianFormatters.formatDate(customEndMs)}",
+                            selected = true,
+                            icon = Icons.Filled.CalendarMonth,
+                            onClick = { pickingCustomField = "end" },
+                            modifier = Modifier.testTag("activity_custom_end")
+                        )
+                    }
+                }
             }
 
             item {
@@ -973,18 +1272,32 @@ fun ActivityScreen(
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         text = "$countFiltered entries",
                         style = MaterialTheme.typography.bodySmall,
                         color = colorScheme.onSurfaceVariant
                     )
-                    Text(
-                        text = "Total ${IndianFormatters.formatInr(totalFiltered)}",
-                        style = SelavuTheme.textStyles.numericCaption,
-                        color = colorScheme.onSurface
-                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (filteredIncomeTotal > 0.0) {
+                            Text(
+                                text = "+${IndianFormatters.formatInr(filteredIncomeTotal)}",
+                                style = SelavuTheme.textStyles.numericCaption,
+                                color = extendedColors.ok
+                            )
+                        }
+                        Text(
+                            text = if (entryTypeFilter == "income" && filteredSpendTotal == 0.0) {
+                                "Income filtered"
+                            } else {
+                                "Spent ${IndianFormatters.formatInr(filteredSpendTotal)}"
+                            },
+                            style = SelavuTheme.textStyles.numericCaption,
+                            color = colorScheme.onSurface
+                        )
+                    }
                 }
             }
 
@@ -993,8 +1306,8 @@ fun ActivityScreen(
                     if (filteredShared.isEmpty()) {
                         SelavuEmptyState(
                             icon = Icons.Filled.SearchOff,
-                            title = "No matching shared expenses",
-                            subtitle = "Adjust the member filter or search text."
+                            title = "No matching shared entries",
+                            subtitle = "Adjust the filters or search text."
                         )
                     } else {
                         SelavuListContainer {
@@ -1011,11 +1324,11 @@ fun ActivityScreen(
                 } else if (filtered.isEmpty()) {
                     SelavuEmptyState(
                         icon = Icons.Filled.SearchOff,
-                        title = "No matching expenses",
-                        subtitle = if (query.isBlank() && filterKey == "all") {
-                            "Entries you add or scan will appear here for search and GST export."
+                        title = "No matching entries",
+                        subtitle = if (query.isBlank() && filterKey == "all" && entryTypeFilter == "all" && dateRangeFilter == "all") {
+                            "Entries you add or scan will appear here for search and CSV export."
                         } else {
-                            "Try clearing your search or switching the category filter."
+                            "Try clearing your search or adjusting the type, date, or category filters."
                         }
                     )
                 } else {
@@ -1226,32 +1539,10 @@ fun CategoriesAndSettingsScreen(
     }
 
     val gstCsvContent = remember(expenses, categories) {
-        buildString {
-            appendLine("Date,Merchant,Category,Subcategory,PaymentMode,BillNumber,GSTIN,TaxableValue,CGST,SGST,IGST,RoundOff,GrandTotal,Items")
-            expenses.sortedByDescending { it.dateEpochMs }.forEach { e ->
-                val catName = categories.firstOrNull { it.id == e.categoryId }?.name ?: e.categoryId
-                val itemsSummary = e.items?.joinToString("; ") { "${it.name} x${it.qty} (HSN ${it.hsn} @${it.gstRate}%)" }.orEmpty()
-                fun esc(s: String) = "\"${s.replace("\"", "\"\"")}\""
-                appendLine(
-                    listOf(
-                        esc(IndianFormatters.formatDate(e.dateEpochMs)),
-                        esc(e.title),
-                        esc(catName),
-                        esc(e.subcategory),
-                        esc(e.paymentMode),
-                        esc(e.billNumber.orEmpty()),
-                        esc(e.gstin.orEmpty()),
-                        e.taxableValue?.toString().orEmpty(),
-                        e.cgst?.toString().orEmpty(),
-                        e.sgst?.toString().orEmpty(),
-                        e.igst?.toString().orEmpty(),
-                        e.roundOff?.toString().orEmpty(),
-                        e.amount.toString(),
-                        esc(itemsSummary)
-                    ).joinToString(",")
-                )
-            }
-        }
+        CsvExporter.exportExpensesCsv(
+            expenses = expenses.sortedByDescending { it.dateEpochMs },
+            categories = categories
+        )
     }
 
     Box(

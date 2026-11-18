@@ -59,8 +59,13 @@ object SmsExpenseReader {
                 while (cursor.moveToNext()) {
                     val sender = if (addressIdx >= 0) cursor.getString(addressIdx).orEmpty() else ""
                     val body = if (bodyIdx >= 0) cursor.getString(bodyIdx).orEmpty() else ""
-                    val dateMs = if (dateIdx >= 0) cursor.getLong(dateIdx) else System.currentTimeMillis()
-                    // OTPs, verification codes, credits, and non-spend alerts return null immediately in memory.
+                    val rawDateMs = if (dateIdx >= 0) cursor.getLong(dateIdx) else System.currentTimeMillis()
+                    val dateMs = when {
+                        rawDateMs in 1_000_000_000L..9_999_999_999L -> rawDateMs * 1000L
+                        rawDateMs > 0L -> rawDateMs
+                        else -> System.currentTimeMillis()
+                    }
+                    // OTPs, verification codes, and non-transaction alerts return null immediately in memory.
                     val parsed = MessageExpenseParser.parse(
                         senderTitle = sender,
                         body = body,
@@ -76,6 +81,11 @@ object SmsExpenseReader {
         }
 
         if (parsedAlerts.isEmpty()) 0
-        else draftStore.enqueueBatchForUser(uid, parsedAlerts, sourceLabel = "SMS")
+        else draftStore.enqueueBatchForUser(
+            uid = uid,
+            alerts = parsedAlerts,
+            sourceLabel = "SMS",
+            cutoffEpochMs = sinceEpochMs
+        )
     }
 }

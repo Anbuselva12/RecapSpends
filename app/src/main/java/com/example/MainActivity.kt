@@ -89,7 +89,6 @@ import com.example.ui.theme.SelavuTheme
 import com.example.ui.viewmodel.AppDataState
 import com.example.ui.viewmodel.SelavuViewModel
 import com.example.util.EnglishStrings
-import com.example.util.IndianFormatters
 import com.example.util.LocalSelavuStrings
 import com.example.util.TamilStrings
 import com.google.firebase.Firebase
@@ -724,7 +723,8 @@ private fun SelavuAppRoot(
                                         },
                                         onOpenSharedExpenseDetail = { shared ->
                                             activeSheet = ActiveSheet.SharedExpenseDetail(shared)
-                                        }
+                                        },
+                                        onShowToast = viewModel::showToast
                                     )
                                 }
 
@@ -779,6 +779,7 @@ private fun SelavuAppRoot(
                                         onAcceptDisclosureAndEnable = { viewModel.acceptSmsDisclosureAndEnable(context) },
                                         onToggleSmsAutoRead = { enabled -> viewModel.setSmsAutoReadEnabled(enabled, context) },
                                         onSyncTodaySms = { viewModel.syncTodaySms(context, userTriggered = true) },
+                                        onAutoSyncTodaySms = { viewModel.syncTodaySms(context, userTriggered = false) },
                                         onUpdateDraft = viewModel::updateReviewDraft,
                                         onApproveDraft = { draft -> viewModel.approveReviewDraft(draft) },
                                         onDeleteDraft = viewModel::deleteReviewDraft,
@@ -837,6 +838,7 @@ private fun SelavuAppRoot(
                                     onOpenNewReminder = { activeSheet = ActiveSheet.NewBillReminder },
                                     onUpdateOdometer = viewModel::updateVehicleOdometer,
                                     onMarkServiceDone = viewModel::markServiceItemDone,
+                                    onRecordLastServiceDone = viewModel::recordLastServiceDone,
                                     onUpdateServiceInterval = viewModel::updateServiceItemInterval,
                                     onDeleteServiceItem = viewModel::deleteServiceItem,
                                     onAddServiceItem = viewModel::addServiceItem,
@@ -881,30 +883,10 @@ private fun shareGstCsv(
     expenses: List<Expense>,
     categories: List<Category>
 ) {
-    val csv = buildString {
-        appendLine("Date,Merchant,Category,Subcategory,PaymentMode,BillNumber,GSTIN,TaxableValue,CGST,SGST,IGST,RoundOff,GrandTotal")
-        expenses.sortedByDescending { it.dateEpochMs }.forEach { e ->
-            val catName = categories.firstOrNull { it.id == e.categoryId }?.name ?: e.categoryId
-            fun esc(s: String) = "\"${s.replace("\"", "\"\"")}\""
-            appendLine(
-                listOf(
-                    esc(IndianFormatters.formatDate(e.dateEpochMs)),
-                    esc(e.title),
-                    esc(catName),
-                    esc(e.subcategory),
-                    esc(e.paymentMode),
-                    esc(e.billNumber.orEmpty()),
-                    esc(e.gstin.orEmpty()),
-                    e.taxableValue?.toString().orEmpty(),
-                    e.cgst?.toString().orEmpty(),
-                    e.sgst?.toString().orEmpty(),
-                    e.igst?.toString().orEmpty(),
-                    e.roundOff?.toString().orEmpty(),
-                    e.amount.toString()
-                ).joinToString(",")
-            )
-        }
-    }
+    val csv = com.example.util.CsvExporter.exportExpensesCsv(
+        expenses = expenses.sortedByDescending { it.dateEpochMs },
+        categories = categories
+    )
     val intent = Intent(Intent.ACTION_SEND).apply {
         type = "text/csv"
         putExtra(Intent.EXTRA_SUBJECT, "RecapSpends Expense & GST Report")

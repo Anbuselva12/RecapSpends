@@ -19,9 +19,16 @@ class SmsExpenseBroadcastReceiver : BroadcastReceiver() {
         // Group multi-part SMS segments by sender
         val groupedBySender = linkedMapOf<String, MutableList<Pair<String, Long>>>()
         messages.forEach { sms ->
-            val sender = sms.displayOriginatingAddress?.trim().orEmpty()
-            val bodyPart = sms.messageBody.orEmpty()
-            val ts = sms.timestampMillis.takeIf { it > 0L } ?: System.currentTimeMillis()
+            val sender = sms.displayOriginatingAddress?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?: sms.originatingAddress?.trim().orEmpty()
+            val bodyPart = sms.displayMessageBody ?: sms.messageBody.orEmpty()
+            val rawTs = sms.timestampMillis
+            val ts = when {
+                rawTs in 1_000_000_000L..9_999_999_999L -> rawTs * 1000L
+                rawTs > 0L -> rawTs
+                else -> System.currentTimeMillis()
+            }
             if (bodyPart.isNotBlank()) {
                 groupedBySender.getOrPut(sender) { mutableListOf() }.add(bodyPart to ts)
             }
@@ -37,7 +44,7 @@ class SmsExpenseBroadcastReceiver : BroadcastReceiver() {
                 groupedBySender.forEach { (sender, parts) ->
                     val fullBody = parts.joinToString("") { it.first }
                     val ts = parts.maxOfOrNull { it.second } ?: System.currentTimeMillis()
-                    // OTPs, verification codes, credits, and non-spend alerts return null immediately in memory.
+                    // OTPs, verification codes, and non-transaction alerts return null immediately in memory.
                     val parsed = MessageExpenseParser.parse(
                         senderTitle = sender,
                         body = fullBody,

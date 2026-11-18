@@ -929,4 +929,95 @@ test("Shared vehicles, projects, bills, categories & post-departure read-only / 
   await assertSucceeds(bobDb.doc(`workspaces/ws_2/projectContributions/${BOB_UID}_c1`).delete());
 });
 
+test("Income entryType is accepted on personal and shared expenses while invalid entryType is rejected", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const ts = nowTs();
+
+  await assertSucceeds(
+    aliceDb.doc(`users/${ALICE_UID}/expenses/inc_1`).set({
+      userId: ALICE_UID,
+      title: "Acme Salary",
+      amount: 85000,
+      dateEpochMs: Date.now(),
+      categoryId: "inc",
+      subcategory: "Salary",
+      paymentMode: "Bank",
+      entryType: "income",
+      isPrivate: true,
+      createdAt: ts,
+      updatedAt: ts,
+    })
+  );
+
+  await assertFails(
+    aliceDb.doc(`users/${ALICE_UID}/expenses/inc_bad`).set({
+      userId: ALICE_UID,
+      title: "Bad Type",
+      amount: 100,
+      dateEpochMs: Date.now(),
+      categoryId: "inc",
+      subcategory: "Salary",
+      paymentMode: "Bank",
+      entryType: "transfer",
+      createdAt: ts,
+      updatedAt: ts,
+    })
+  );
+
+  await assertSucceeds(
+    aliceDb.doc("workspaces/ws_inc").set({
+      name: "Family",
+      ownerUid: ALICE_UID,
+      inviteCode: "INC99999",
+      memberIds: [ALICE_UID],
+      members: { [ALICE_UID]: { uid: ALICE_UID, name: "Alice", role: "owner", joinedAtMs: Date.now() } },
+      createdAt: ts,
+      updatedAt: ts,
+    })
+  );
+
+  await assertSucceeds(
+    aliceDb.doc(`workspaces/ws_inc/expenses/${ALICE_UID}_inc_1`).set({
+      workspaceId: "ws_inc",
+      sourceExpenseId: "inc_1",
+      ownerUid: ALICE_UID,
+      ownerName: "Alice",
+      memberIds: [ALICE_UID],
+      title: "Freelance Retainer",
+      amount: 25000,
+      dateEpochMs: Date.now(),
+      categoryId: "inc",
+      categoryName: "Income",
+      categoryIconKey: "rupee",
+      categoryColorIndex: 4,
+      subcategory: "Business / Freelance",
+      paymentMode: "Bank",
+      entryType: "income",
+      createdAt: ts,
+      updatedAt: ts,
+    })
+  );
+
+  await assertFails(
+    aliceDb.doc(`workspaces/ws_inc/expenses/${ALICE_UID}_inc_bad`).set({
+      workspaceId: "ws_inc",
+      sourceExpenseId: "inc_bad",
+      ownerUid: ALICE_UID,
+      ownerName: "Alice",
+      memberIds: [ALICE_UID],
+      title: "Bad Shared Type",
+      amount: 500,
+      dateEpochMs: Date.now(),
+      categoryId: "inc",
+      categoryName: "Income",
+      categoryIconKey: "rupee",
+      categoryColorIndex: 4,
+      subcategory: "Salary",
+      paymentMode: "Bank",
+      entryType: "bonus",
+      createdAt: ts,
+      updatedAt: ts,
+    })
+  );
+});
 

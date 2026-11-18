@@ -12,7 +12,6 @@ import com.example.data.model.ProjectPaymentItem
 import com.example.data.model.ProjectPhase
 import com.example.data.model.ProjectProduct
 import com.example.data.model.ScannedBillDraft
-import com.example.data.model.ServiceItem
 import com.example.data.model.ServiceVisit
 import com.example.data.model.SharedBill
 import com.example.data.model.SharedCategory

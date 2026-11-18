@@ -91,4 +91,34 @@ class SelavuModelsEnhancementsTest {
         assertEquals(9.0, encodedItems.first()["unitPrice"] as Double, 0.001)
         assertEquals(18000.0, encodedItems.first()["totalPrice"] as Double, 0.001)
     }
+
+    @Test
+    fun expenseAndSharedExpenseMaps_serializeEntryTypeForExpenseAndIncome() {
+        val defaultExpenseMap = Expense(title = "Coffee", amount = 120.0).toCreateMap("uid_1")
+        assertEquals("expense", defaultExpenseMap["entryType"])
+
+        val incomeExpense = Expense(
+            title = "Acme Salary",
+            amount = 75000.0,
+            categoryId = "inc",
+            subcategory = "Salary",
+            entryType = "income",
+            isPrivate = true
+        )
+        assertEquals("income", incomeExpense.toCreateMap("uid_1")["entryType"])
+        assertEquals("income", incomeExpense.toUpdateMap()["entryType"])
+
+        val sharedIncome = SharedExpense(
+            ownerUid = "uid_1",
+            ownerName = "Asha",
+            title = "Rental income",
+            amount = 15000.0,
+            categoryId = "inc",
+            categoryName = "Income",
+            subcategory = "Rental & other",
+            entryType = "income"
+        )
+        assertEquals("income", sharedIncome.toCreateMap()["entryType"])
+    }
 }
+

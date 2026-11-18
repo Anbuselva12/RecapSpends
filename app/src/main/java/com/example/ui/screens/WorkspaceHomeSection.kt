@@ -83,12 +83,12 @@ fun ReviewQueueBanner(
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "$draftCount expense alert${if (draftCount > 1) "s" else ""} ready to review",
+                    text = "$draftCount transaction alert${if (draftCount > 1) "s" else ""} ready to review",
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                     color = colorScheme.onSurface
                 )
                 Text(
-                    text = "Map category, sub-category or items before saving",
+                    text = "Map category, income/expense type or items before saving",
                     style = MaterialTheme.typography.bodySmall,
                     color = colorScheme.onSurfaceVariant
                 )
@@ -160,10 +160,13 @@ fun WorkspaceHomeContent(
     val monthShared = remember(filteredShared, nowMs) {
         filteredShared.filter { IndianFormatters.isSameMonth(it.dateEpochMs, nowMs) }
     }
-    val monthTotal = remember(monthShared) { monthShared.sumOf { it.amount } }
+    val monthSharedSpend = remember(monthShared) { monthShared.filter { it.entryType != "income" } }
+    val monthSharedIncome = remember(monthShared) { monthShared.filter { it.entryType == "income" } }
+    val monthTotal = remember(monthSharedSpend) { monthSharedSpend.sumOf { it.amount } }
+    val monthIncomeTotal = remember(monthSharedIncome) { monthSharedIncome.sumOf { it.amount } }
 
-    val slices = remember(monthShared) {
-        monthShared.groupBy { it.categoryId }.entries.map { (catId, list) ->
+    val slices = remember(monthSharedSpend) {
+        monthSharedSpend.groupBy { it.categoryId }.entries.map { (catId, list) ->
             val first = list.first()
             CategoryShareSlice(
                 categoryId = catId,
@@ -226,8 +229,16 @@ fun WorkspaceHomeContent(
             text = IndianFormatters.formatInr(monthTotal),
             style = MaterialTheme.typography.displayLarge,
             color = heroFg,
-            modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+            modifier = Modifier.padding(top = 8.dp, bottom = 6.dp)
         )
+        if (monthIncomeTotal > 0.0) {
+            Text(
+                text = "Shared income +${IndianFormatters.formatInr(monthIncomeTotal)} this month",
+                style = SelavuTheme.textStyles.numericCaption,
+                color = heroFg.copy(alpha = 0.94f),
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+        }
         Text(
             text = when (filter) {
                 WorkspaceExpenseFilter.ALL -> "${monthShared.size} shared entries this month"
@@ -342,6 +353,8 @@ fun SharedExpenseRowItem(
     onClick: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val extendedColors = SelavuTheme.extendedColors
+    val isIncome = expense.entryType == "income"
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -372,9 +385,13 @@ fun SharedExpenseRowItem(
                     isAccent = !isMine,
                     status = if (isMine) ServiceStatus.OK else null
                 )
+                if (isIncome) {
+                    StatusPill(text = "Income", status = ServiceStatus.OK)
+                }
             }
+            val subText = if (expense.subcategory.isNotBlank()) " › ${expense.subcategory}" else ""
             Text(
-                text = "${expense.categoryName} · ${IndianFormatters.formatShortDate(expense.dateEpochMs)} · ${expense.paymentMode}",
+                text = "${expense.categoryName}$subText · ${IndianFormatters.formatShortDate(expense.dateEpochMs)} · ${expense.paymentMode}",
                 style = MaterialTheme.typography.bodySmall,
                 color = colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -382,9 +399,9 @@ fun SharedExpenseRowItem(
             )
         }
         Text(
-            text = IndianFormatters.formatInr(expense.amount),
+            text = if (isIncome) "+${IndianFormatters.formatInr(expense.amount)}" else IndianFormatters.formatInr(expense.amount),
             style = SelavuTheme.textStyles.numericBody,
-            color = colorScheme.onSurface
+            color = if (isIncome) extendedColors.ok else colorScheme.onSurface
         )
     }
 }

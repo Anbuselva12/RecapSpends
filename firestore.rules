@@ -89,7 +89,8 @@ service cloud.firestore {
              (!('attachmentNotes' in data) || data.attachmentNotes == null || (data.attachmentNotes is list && data.attachmentNotes.size() <= 10 && (data.attachmentNotes.size() == 0 || data.attachmentNotes[0] is string))) &&
              (!('odometerReading' in data) || data.odometerReading == null || (data.odometerReading is int && data.odometerReading >= 0 && data.odometerReading <= 2000000)) &&
              (!('fuelPricePerLitre' in data) || data.fuelPricePerLitre == null || (data.fuelPricePerLitre is number && data.fuelPricePerLitre >= 0 && data.fuelPricePerLitre <= 100000)) &&
-             (!('fuelLitres' in data) || data.fuelLitres == null || (data.fuelLitres is number && data.fuelLitres >= 0 && data.fuelLitres <= 100000));
+             (!('fuelLitres' in data) || data.fuelLitres == null || (data.fuelLitres is number && data.fuelLitres >= 0 && data.fuelLitres <= 100000)) &&
+             (!('entryType' in data) || data.entryType == null || (data.entryType is string && data.entryType in ['expense', 'income']));
     }
 
     function isValidVehicle(data, userId) {
@@ -178,7 +179,8 @@ service cloud.firestore {
              (!('odometerReading' in data) || data.odometerReading == null || (data.odometerReading is int && data.odometerReading >= 0 && data.odometerReading <= 2000000)) &&
              (!('fuelPricePerLitre' in data) || data.fuelPricePerLitre == null || (data.fuelPricePerLitre is number && data.fuelPricePerLitre >= 0 && data.fuelPricePerLitre <= 100000)) &&
              (!('fuelLitres' in data) || data.fuelLitres == null || (data.fuelLitres is number && data.fuelLitres >= 0 && data.fuelLitres <= 100000)) &&
-             (!('retainedForDeparture' in data) || data.retainedForDeparture == null || data.retainedForDeparture is bool);
+             (!('retainedForDeparture' in data) || data.retainedForDeparture == null || data.retainedForDeparture is bool) &&
+             (!('entryType' in data) || data.entryType == null || (data.entryType is string && data.entryType in ['expense', 'income']));
     }
 
     function isValidSharedVehicle(data, workspaceId) {
@@ -313,7 +315,7 @@ service cloud.firestore {
         allow list: if isOwner(userId);
         allow create: if isValidId(userId) && isValidId(expenseId) && isOwner(userId) &&
                          incoming().keys().hasAll(['userId', 'title', 'amount', 'dateEpochMs', 'categoryId', 'subcategory', 'paymentMode', 'createdAt', 'updatedAt']) &&
-                         incoming().keys().hasOnly(['userId', 'title', 'amount', 'dateEpochMs', 'categoryId', 'subcategory', 'paymentMode', 'isPrivate', 'projectId', 'vehicleId', 'gstin', 'billNumber', 'taxableValue', 'cgst', 'sgst', 'igst', 'roundOff', 'items', 'attachmentNotes', 'odometerReading', 'fuelPricePerLitre', 'fuelLitres', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'title', 'amount', 'dateEpochMs', 'categoryId', 'subcategory', 'paymentMode', 'entryType', 'isPrivate', 'projectId', 'vehicleId', 'gstin', 'billNumber', 'taxableValue', 'cgst', 'sgst', 'igst', 'roundOff', 'items', 'attachmentNotes', 'odometerReading', 'fuelPricePerLitre', 'fuelLitres', 'createdAt', 'updatedAt']) &&
                          isValidTimestamp(incoming().createdAt) &&
                          isValidTimestamp(incoming().updatedAt) &&
                          isValidExpense(incoming(), userId);
@@ -322,7 +324,7 @@ service cloud.firestore {
                          incoming().userId == existing().userId &&
                          incoming().createdAt == existing().createdAt &&
                          isValidTimestamp(incoming().updatedAt) &&
-                         incoming().diff(existing()).affectedKeys().hasOnly(['title', 'amount', 'dateEpochMs', 'categoryId', 'subcategory', 'paymentMode', 'isPrivate', 'projectId', 'vehicleId', 'gstin', 'billNumber', 'taxableValue', 'cgst', 'sgst', 'igst', 'roundOff', 'items', 'attachmentNotes', 'odometerReading', 'fuelPricePerLitre', 'fuelLitres', 'updatedAt']);
+                         incoming().diff(existing()).affectedKeys().hasOnly(['title', 'amount', 'dateEpochMs', 'categoryId', 'subcategory', 'paymentMode', 'entryType', 'isPrivate', 'projectId', 'vehicleId', 'gstin', 'billNumber', 'taxableValue', 'cgst', 'sgst', 'igst', 'roundOff', 'items', 'attachmentNotes', 'odometerReading', 'fuelPricePerLitre', 'fuelLitres', 'updatedAt']);
         allow delete: if isValidId(userId) && isValidId(expenseId) && isOwner(userId);
       }
 
@@ -446,7 +448,7 @@ service cloud.firestore {
         allow list: if isSignedIn() && (request.auth.uid in existing().memberIds);
         allow create: if isValidId(workspaceId) && isValidId(sharedExpenseId) && isSignedIn() &&
                          incoming().keys().hasAll(['workspaceId', 'sourceExpenseId', 'ownerUid', 'ownerName', 'memberIds', 'title', 'amount', 'dateEpochMs', 'categoryId', 'categoryName', 'categoryIconKey', 'categoryColorIndex', 'subcategory', 'paymentMode', 'createdAt', 'updatedAt']) &&
-                         incoming().keys().hasOnly(['workspaceId', 'sourceExpenseId', 'ownerUid', 'ownerName', 'memberIds', 'title', 'amount', 'dateEpochMs', 'categoryId', 'categoryName', 'categoryIconKey', 'categoryColorIndex', 'subcategory', 'paymentMode', 'sharedVehicleId', 'sharedVehicleOwnerUid', 'sharedProjectId', 'sharedProjectOwnerUid', 'odometerReading', 'fuelPricePerLitre', 'fuelLitres', 'retainedForDeparture', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['workspaceId', 'sourceExpenseId', 'ownerUid', 'ownerName', 'memberIds', 'title', 'amount', 'dateEpochMs', 'categoryId', 'categoryName', 'categoryIconKey', 'categoryColorIndex', 'subcategory', 'paymentMode', 'entryType', 'sharedVehicleId', 'sharedVehicleOwnerUid', 'sharedProjectId', 'sharedProjectOwnerUid', 'odometerReading', 'fuelPricePerLitre', 'fuelLitres', 'retainedForDeparture', 'createdAt', 'updatedAt']) &&
                          incoming().ownerUid == request.auth.uid &&
                          (request.auth.uid in incoming().memberIds) &&
                          (!('retainedForDeparture' in incoming()) || incoming().retainedForDeparture == false) &&
@@ -469,7 +471,7 @@ service cloud.firestore {
                             (!('retainedForDeparture' in incoming()) || incoming().retainedForDeparture == false) &&
                             (request.auth.uid in incoming().memberIds) &&
                             wsData(workspaceId).memberIds.hasAll(incoming().memberIds) &&
-                            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'ownerName', 'amount', 'dateEpochMs', 'categoryId', 'categoryName', 'categoryIconKey', 'categoryColorIndex', 'subcategory', 'paymentMode', 'sharedVehicleId', 'sharedVehicleOwnerUid', 'sharedProjectId', 'sharedProjectOwnerUid', 'odometerReading', 'fuelPricePerLitre', 'fuelLitres', 'memberIds', 'updatedAt'])) ||
+                            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'ownerName', 'amount', 'dateEpochMs', 'categoryId', 'categoryName', 'categoryIconKey', 'categoryColorIndex', 'subcategory', 'paymentMode', 'entryType', 'sharedVehicleId', 'sharedVehicleOwnerUid', 'sharedProjectId', 'sharedProjectOwnerUid', 'odometerReading', 'fuelPricePerLitre', 'fuelLitres', 'memberIds', 'updatedAt'])) ||
                            // Action 2: Workspace owner kicks a member (shrinks memberIds or marks retainedForDeparture for foreign contribution)
                            (isWsOwner(workspaceId) &&
                             existing().memberIds.hasAll(incoming().memberIds) &&

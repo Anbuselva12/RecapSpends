@@ -116,6 +116,7 @@ data class Expense(
     val categoryId: String = "groc",
     val subcategory: String = "",
     val paymentMode: String = "UPI",
+    val entryType: String = "expense",
     @get:PropertyName("isPrivate")
     @field:PropertyName("isPrivate")
     val isPrivate: Boolean = false,
@@ -145,6 +146,7 @@ data class Expense(
             "categoryId" to categoryId.ifBlank { "groc" }.take(128),
             "subcategory" to subcategory.take(80),
             "paymentMode" to if (paymentMode in listOf("UPI", "Cash", "Card", "Bank")) paymentMode else "UPI",
+            "entryType" to if (entryType == "income") "income" else "expense",
             "isPrivate" to isPrivate,
             "createdAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp()
@@ -174,6 +176,7 @@ data class Expense(
             "categoryId" to categoryId.ifBlank { "groc" }.take(128),
             "subcategory" to subcategory.take(80),
             "paymentMode" to if (paymentMode in listOf("UPI", "Cash", "Card", "Bank")) paymentMode else "UPI",
+            "entryType" to if (entryType == "income") "income" else "expense",
             "isPrivate" to isPrivate,
             "updatedAt" to FieldValue.serverTimestamp()
         )
@@ -738,6 +741,7 @@ data class SharedExpense(
     val categoryColorIndex: Int = 9,
     val subcategory: String = "",
     val paymentMode: String = "UPI",
+    val entryType: String = "expense",
     val sharedVehicleId: String? = null,
     val sharedVehicleOwnerUid: String? = null,
     val sharedProjectId: String? = null,
@@ -765,6 +769,7 @@ data class SharedExpense(
             "categoryColorIndex" to categoryColorIndex.coerceIn(1, 9),
             "subcategory" to subcategory.take(80),
             "paymentMode" to if (paymentMode in listOf("UPI", "Cash", "Card", "Bank")) paymentMode else "UPI",
+            "entryType" to if (entryType == "income") "income" else "expense",
             "retainedForDeparture" to retainedForDeparture,
             "createdAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp()

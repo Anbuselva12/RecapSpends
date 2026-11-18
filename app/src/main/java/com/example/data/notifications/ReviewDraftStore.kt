@@ -40,6 +40,7 @@ data class ReviewDraft(
     val snippet: String = "",
     val fingerprint: String = "",
     val sourceLabel: String = "SMS",
+    val entryType: String = "expense",
     val isPrivate: Boolean = false,
     val items: List<ReviewDraftItem> = emptyList(),
     val vehicleId: String? = null,
@@ -64,9 +65,7 @@ class ReviewDraftStore internal constructor(
     suspend fun setActiveUser(uid: String) {
         dataStore.edit { prefs ->
             prefs[activeUidKey] = uid
-            if (prefs[smsSinceKey(uid)] == null) {
-                prefs[smsSinceKey(uid)] = startOfTodayEpochMs()
-            }
+            prefs[smsSinceKey(uid)] = startOfTodayEpochMs()
         }
     }
 
@@ -82,22 +81,23 @@ class ReviewDraftStore internal constructor(
 
     suspend fun getActiveUid(): String? = dataStore.data.first()[activeUidKey]
 
+    /**
+     * Always resolves to the start of the current date (00:00:00 local time)
+     * so only the current date's SMS are synced/refreshed instead of a stale install date.
+     */
     suspend fun ensureSmsSinceEpochMs(uid: String, nowMs: Long = System.currentTimeMillis()): Long {
-        var resolved = startOfTodayEpochMs(nowMs)
+        val todayStart = startOfTodayEpochMs(nowMs)
         dataStore.edit { prefs ->
-            val existing = prefs[smsSinceKey(uid)]
-            if (existing != null && existing > 0L) {
-                resolved = existing
-            } else {
-                prefs[smsSinceKey(uid)] = resolved
-            }
+            prefs[smsSinceKey(uid)] = todayStart
         }
-        return resolved
+        return todayStart
     }
 
     fun observeSmsSinceEpochMs(uid: String): Flow<Long> =
         dataStore.data.map { prefs ->
-            prefs[smsSinceKey(uid)] ?: startOfTodayEpochMs()
+            val todayStart = startOfTodayEpochMs()
+            val stored = prefs[smsSinceKey(uid)] ?: 0L
+            maxOf(stored, todayStart)
         }
 
     fun observeDrafts(uid: String): Flow<List<ReviewDraft>> =
@@ -126,20 +126,21 @@ class ReviewDraftStore internal constructor(
             if (acceptedDisclosure != null) {
                 prefs[disclosureAcceptedKey(uid)] = acceptedDisclosure
             }
-            if (prefs[smsSinceKey(uid)] == null) {
-                prefs[smsSinceKey(uid)] = sinceEpochMs ?: startOfTodayEpochMs()
-            }
+            prefs[smsSinceKey(uid)] = sinceEpochMs ?: startOfTodayEpochMs()
         }
     }
 
-    suspend fun enqueueForActiveUser(alert: ParsedExpenseAlert, sourceLabel: String = "SMS"): Boolean {
+    suspend fun enqueueForActiveUser(
+        alert: ParsedExpenseAlert,
+        sourceLabel: String = "SMS",
+        cutoffEpochMs: Long = startOfTodayEpochMs()
+    ): Boolean {
         var added = false
         dataStore.edit { prefs ->
             val uid = prefs[activeUidKey] ?: return@edit
             val enabled = prefs[smsEnabledKey(uid)] ?: false
             if (!enabled) return@edit
-            val sinceMs = prefs[smsSinceKey(uid)] ?: 0L
-            if (sinceMs > 0L && alert.dateEpochMs < sinceMs) return@edit
+            if (cutoffEpochMs > 0L && alert.dateEpochMs < cutoffEpochMs) return@edit
 
             val seen = decodeStringList(prefs[seenFingerprintsKey(uid)]).toMutableList()
             val existing = decodeDrafts(prefs[draftsKey(uid)]).toMutableList()
@@ -155,7 +156,8 @@ class ReviewDraftStore internal constructor(
                 subcategory = alert.suggestedSubcategory,
                 snippet = alert.snippet,
                 fingerprint = alert.fingerprint,
-                sourceLabel = sourceLabel.take(40)
+                sourceLabel = sourceLabel.take(40),
+                entryType = if (alert.entryType == "income") "income" else "expense"
             )
             existing.add(0, newDraft)
             seen.add(0, alert.fingerprint)
@@ -169,14 +171,14 @@ class ReviewDraftStore internal constructor(
     suspend fun enqueueBatchForUser(
         uid: String,
         alerts: List<ParsedExpenseAlert>,
-        sourceLabel: String = "SMS"
+        sourceLabel: String = "SMS",
+        cutoffEpochMs: Long = startOfTodayEpochMs()
     ): Int {
         if (alerts.isEmpty()) return 0
         var addedCount = 0
         dataStore.edit { prefs ->
             val enabled = prefs[smsEnabledKey(uid)] ?: false
             if (!enabled) return@edit
-            val sinceMs = prefs[smsSinceKey(uid)] ?: 0L
 
             val seen = decodeStringList(prefs[seenFingerprintsKey(uid)]).toMutableList()
             val existing = decodeDrafts(prefs[draftsKey(uid)]).toMutableList()
@@ -184,7 +186,7 @@ class ReviewDraftStore internal constructor(
             val seenSet = seen.toHashSet()
 
             alerts.sortedByDescending { it.dateEpochMs }.forEach { alert ->
-                if (sinceMs > 0L && alert.dateEpochMs < sinceMs) return@forEach
+                if (cutoffEpochMs > 0L && alert.dateEpochMs < cutoffEpochMs) return@forEach
                 if (alert.fingerprint in seenSet || alert.fingerprint in existingFingerprints) return@forEach
 
                 val newDraft = ReviewDraft(
@@ -196,7 +198,8 @@ class ReviewDraftStore internal constructor(
                     subcategory = alert.suggestedSubcategory,
                     snippet = alert.snippet,
                     fingerprint = alert.fingerprint,
-                    sourceLabel = sourceLabel.take(40)
+                    sourceLabel = sourceLabel.take(40),
+                    entryType = if (alert.entryType == "income") "income" else "expense"
                 )
                 existing.add(newDraft)
                 existingFingerprints.add(alert.fingerprint)
@@ -284,6 +287,7 @@ class ReviewDraftStore internal constructor(
                 put("snippet", d.snippet)
                 put("fingerprint", d.fingerprint)
                 put("sourceLabel", d.sourceLabel)
+                put("entryType", if (d.entryType == "income") "income" else "expense")
                 put("isPrivate", d.isPrivate)
                 if (!d.vehicleId.isNullOrBlank()) put("vehicleId", d.vehicleId)
                 if (!d.projectId.isNullOrBlank()) put("projectId", d.projectId)
@@ -343,6 +347,7 @@ class ReviewDraftStore internal constructor(
                             snippet = obj.optString("snippet", ""),
                             fingerprint = obj.optString("fingerprint", ""),
                             sourceLabel = obj.optString("sourceLabel", "SMS"),
+                            entryType = if (obj.optString("entryType", "expense") == "income") "income" else "expense",
                             isPrivate = obj.optBoolean("isPrivate", false),
                             items = items,
                             vehicleId = obj.optString("vehicleId", "").takeIf { it.isNotBlank() },

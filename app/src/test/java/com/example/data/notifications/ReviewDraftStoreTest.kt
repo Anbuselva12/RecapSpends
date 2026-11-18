@@ -157,4 +157,43 @@ class ReviewDraftStoreTest {
         assertTrue(store.observeDrafts("uid_alice").first().isEmpty())
         assertFalse(store.observeSmsEnabled("uid_alice").first())
     }
+
+    @Test
+    fun incomeEntryTypeAndTodayOnlyCutoffRefresh_persistCorrectly() = runTest(UnconfinedTestDispatcher()) {
+        val store = createStore(this, "income_and_today_cutoff")
+        val nowMs = System.currentTimeMillis()
+        val todayStart = ReviewDraftStore.startOfTodayEpochMs(nowMs)
+        val staleInstallDay = todayStart - (5L * 86_400_000L)
+
+        store.setActiveUser("uid_alice")
+        store.setSmsEnabled(
+            uid = "uid_alice",
+            enabled = true,
+            acceptedDisclosure = true,
+            sinceEpochMs = staleInstallDay
+        )
+
+        // observeSmsSinceEpochMs never stays pinned to a stale past install date
+        assertTrue(store.observeSmsSinceEpochMs("uid_alice").first() >= todayStart)
+        assertEquals(todayStart, store.ensureSmsSinceEpochMs("uid_alice", nowMs))
+
+        val incomeAlert = MessageExpenseParser.parse(
+            senderTitle = "HDFC Bank",
+            body = "Rs 45,000.00 credited to A/c XX1234 towards salary on 17-11-26.",
+            timestampMs = todayStart + 60_000L
+        )!!
+        assertEquals("income", incomeAlert.entryType)
+        assertTrue(store.enqueueForActiveUser(incomeAlert, "SMS"))
+
+        val stored = store.observeDrafts("uid_alice").first().single()
+        assertEquals("income", stored.entryType)
+        assertEquals("inc", stored.categoryId)
+
+        // Switching entryType back to expense persists across JSON round-trip
+        store.updateDraft("uid_alice", stored.copy(entryType = "expense", isPrivate = true))
+        val updated = store.observeDrafts("uid_alice").first().single()
+        assertEquals("expense", updated.entryType)
+        assertTrue(updated.isPrivate)
+    }
 }
+

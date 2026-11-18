@@ -28,14 +28,11 @@ class MessageExpenseParserTest {
     }
 
     @Test
-    fun parse_creditRefundFailedMandateAndBillDueAlerts_areRejected() {
+    fun parse_failedMandateBalanceAndBillDueAlerts_areRejected() {
         val nonSpendSamples = listOf(
-            "HDFC Bank" to "Rs 2,500.00 credited to A/c XX1234 via UPI from Rahul.",
             "ICICI Bank" to "Available Balance is Rs 15,000.00 in A/c XX9876.",
             "SBI" to "Transaction failed for Rs. 450 at Swiggy due to timeout.",
-            "Axis" to "Refunded INR 399.00 to your card XX4411 from Flipkart.",
             "PhonePe" to "Arun is requesting Rs 600 via collect request.",
-            "SBI" to "Your A/c XX1234 is credited with Rs 65,000.00 towards salary on 01-11-26.",
             "SBI Card" to "Payment of Rs.12,450.00 received towards your SBI Credit Card XX9267. Thank you.",
             "HDFC Bank" to "Thanks for your payment of Rs. 8,500 towards HDFC Credit Card XX9012.",
             "ICICI Bank" to "Your Rs 499 debited from A/c XX4001 has been reversed on 15-11-26.",
@@ -44,33 +41,86 @@ class MessageExpenseParserTest {
             "SBI Card" to "Statement generated for SBI Card XX9267. Total Amount Due: Rs.15,200.00. Min Due: Rs.760.00 due on 05-12-26.",
             "Kotak" to "Upcoming AutoPay: Rs.799 will be debited on 18-11-26 towards JioFiber.",
             "Axis Bank" to "Pre-approved loan & EMI offer! Convert your Rs.5,680 txn to EMI today.",
-            "HDFC" to "Rs. 1,200.00 cashback credited to your HDFC Bank A/c XX1234.",
             "ICICI" to "Your Card XX4001 txn of Rs 3,000 was declined due to insufficient funds.",
             "SBI Card" to "Your SBI Credit Card XX9267 has been blocked for suspicious txn of Rs. 9,000."
         )
 
         nonSpendSamples.forEach { (sender, body) ->
             assertNull(
-                "Expected non-spend alert to be rejected: $body",
+                "Expected non-transaction alert to be rejected: $body",
                 MessageExpenseParser.parse(sender, body, 1_700_000_000_000L)
             )
         }
     }
 
     @Test
+    fun parse_creditAndSalaryIncomeAlerts_extractsIncomeEntryType() {
+        val upiCredit = MessageExpenseParser.parse(
+            "HDFC Bank",
+            "Rs 2,500.00 credited to A/c XX1234 via UPI from Rahul.",
+            1_700_000_000_000L
+        )
+        assertNotNull(upiCredit)
+        assertEquals("income", upiCredit!!.entryType)
+        assertEquals(2500.0, upiCredit.amount, 0.01)
+        assertEquals("UPI", upiCredit.paymentMode)
+        assertEquals("inc", upiCredit.suggestedCategoryId)
+        assertEquals("Rahul", upiCredit.title)
+
+        val salary = MessageExpenseParser.parse(
+            "SBI",
+            "Your A/c XX1234 is credited with Rs 65,000.00 towards salary on 01-11-26.",
+            1_700_000_010_000L
+        )
+        assertNotNull(salary)
+        assertEquals("income", salary!!.entryType)
+        assertEquals(65000.0, salary.amount, 0.01)
+        assertEquals("inc", salary.suggestedCategoryId)
+        assertEquals("Salary", salary.suggestedSubcategory)
+
+        val refund = MessageExpenseParser.parse(
+            "Axis",
+            "Refunded INR 399.00 to your card XX4411 from Flipkart.",
+            1_700_000_020_000L
+        )
+        assertNotNull(refund)
+        assertEquals("income", refund!!.entryType)
+        assertEquals(399.0, refund.amount, 0.01)
+        assertEquals("Refund & cashback", refund.suggestedSubcategory)
+
+        val cashback = MessageExpenseParser.parse(
+            "HDFC",
+            "Rs. 1,200.00 cashback credited to your HDFC Bank A/c XX1234.",
+            1_700_000_030_000L
+        )
+        assertNotNull(cashback)
+        assertEquals("income", cashback!!.entryType)
+        assertEquals(1200.0, cashback.amount, 0.01)
+        assertEquals("Refund & cashback", cashback.suggestedSubcategory)
+    }
+
+    @Test
     fun parse_userExactSbiCreditCardUpiSms_extractsAmountMerchantAndUpiMode() {
-        val exactSms =
-            "Rs.5,680.00 spent on your SBI Credit Card ending with 9267 at sbipmopad0222119002854 on 15-11-26 via UPI (Ref No. 631909616383). Trxn. not done by you? Report at"
-        val parsed = MessageExpenseParser.parse(
-            senderTitle = "AX-SBICRD",
-            body = exactSms,
-            timestampMs = 1_700_000_040_000L
+        val exactUserSms =
+            "Rs.5,680.00 spent on your SBI Credit Card ending with 9267 at sbipmopad0222119002854 on 15-11-26 via UPI (Ref No. 631909616383). Trxn. not done by you?"
+        val formattedVariants = listOf(
+            "" to exactUserSms,
+            "AX-SBICRD" to exactUserSms,
+            "JD-SBICRD-S" to "Rs.\u00A05,680.00 spent on your SBI Credit Card\nending with 9267 at sbipmopad0222119002854 on 15-11-26 via UPI (Ref No. 631909616383). Trxn. not done by you?"
         )
 
-        assertNotNull(parsed)
-        assertEquals(5680.0, parsed!!.amount, 0.01)
-        assertEquals("UPI", parsed.paymentMode)
-        assertEquals("sbipmopad0222119002854", parsed.title)
+        formattedVariants.forEach { (sender, body) ->
+            val parsed = MessageExpenseParser.parse(
+                senderTitle = sender,
+                body = body,
+                timestampMs = 1_700_000_040_000L
+            )
+            assertNotNull("Expected SBI CC UPI SMS to parse for sender=$sender", parsed)
+            assertEquals("expense", parsed!!.entryType)
+            assertEquals(5680.0, parsed.amount, 0.01)
+            assertEquals("UPI", parsed.paymentMode)
+            assertEquals("sbipmopad0222119002854", parsed.title)
+        }
     }
 
     @Test
@@ -80,7 +130,8 @@ class MessageExpenseParserTest {
         val parsed = MessageExpenseParser.parse("JD-SBICRD", smsWithLinkAndLimit, 1_700_000_040_000L)
 
         assertNotNull(parsed)
-        assertEquals(5680.0, parsed!!.amount, 0.01)
+        assertEquals("expense", parsed!!.entryType)
+        assertEquals(5680.0, parsed.amount, 0.01)
         assertEquals("UPI", parsed.paymentMode)
         assertEquals("sbipmopad0222119002854", parsed.title)
     }

@@ -177,7 +177,8 @@ class SelavuRepositoryRuleTest : FirestoreEmulatorTestBase() {
         val bills = withTimeout(FLOW_TIMEOUT_MS) { repository.observeBills(uid).first() }
         val projects = withTimeout(FLOW_TIMEOUT_MS) { repository.observeProjects(uid).first() }
 
-        assertEquals(9, categories.size)
+        assertEquals(10, categories.size)
+        assertTrue(categories.any { it.id == "inc" })
         assertTrue(expenses.isEmpty())
         assertTrue(vehicles.isEmpty())
         assertTrue(bills.isEmpty())
